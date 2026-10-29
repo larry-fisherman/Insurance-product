@@ -1,0 +1,49 @@
+name: cgl-database
+
+services:
+  postgres:
+    image: postgres:18-bookworm
+    environment:
+      POSTGRES_DB: cgl_dev
+      POSTGRES_USER: cgl_admin
+      POSTGRES_PASSWORD: ${CGL_POSTGRES_ADMIN_PASSWORD:?Run make db-config first}
+      CGL_POSTGRES_MIGRATION_PASSWORD: ${CGL_POSTGRES_MIGRATION_PASSWORD:?Run make db-config first}
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    ports:
+      - "127.0.0.1:${CGL_POSTGRES_PORT:-55432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+      - ./infra/local/postgres/init.sql:/docker-entrypoint-initdb.d/001-roles.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cgl_admin -d cgl_dev"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    security_opt:
+      - no-new-privileges:true
+
+  migrate:
+    profiles: ["tools"]
+    image: cgl-workspace-api
+    build:
+      context: .
+      dockerfile: infra/local/api.Dockerfile
+    environment:
+      CGL_APP_ENV: local
+      CGL_MIGRATION_DATABASE_URL: postgresql+psycopg://cgl_migrator:${CGL_POSTGRES_MIGRATION_PASSWORD:?Run make db-config first}@postgres:5432/cgl_dev
+    command: ["alembic", "-c", "/app/alembic.ini", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  postgres_data:

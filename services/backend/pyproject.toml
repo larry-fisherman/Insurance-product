@@ -1,0 +1,70 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cgl-api"
+version = "0.1.0"
+description = "CGL submission workspace API"
+requires-python = ">=3.13,<3.15"
+dependencies = [
+  "alembic==1.20.1",
+  "argon2-cffi==25.1.0",
+  "boto3==1.43.121",
+  "celery[redis]==5.6.3",
+  "kombu==5.6.2",
+  "cryptography==50.0.2",
+  "fastapi==0.162.0",
+  "httpx2==2.16.0",
+  "pydantic-settings==2.16.2",
+  "openpyxl==3.1.5",
+  "pypdf==6.21.4",
+  "pypdfium2==5.14.0",
+  "pyotp==2.10.0",
+  "python-multipart==0.0.32",
+  "redis==6.4.0",
+  "reportlab==5.1.0",
+  "psycopg[binary]==3.3.6",
+  "sqlalchemy==2.1.6",
+  "uvicorn==0.54.0",
+]
+
+[dependency-groups]
+dev = [
+  "mypy==2.4.1",
+  "pytest==9.2.0",
+  "ruff==0.17.3",
+  "types-openpyxl==3.1.5.20250919",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+filterwarnings = ["error"]
+markers = ["database: integration tests that create and remove disposable local PostgreSQL databases"]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"] # Formatter wraps code; evidence messages and SQL remain readable.
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+files = ["app", "tests", "migrations"]
+plugins = ["pydantic.mypy"]
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
+
+[[tool.mypy.overrides]]
+module = ["boto3.*", "botocore.*", "celery.*", "pypdfium2.*", "reportlab.*"]
+ignore_missing_imports = true

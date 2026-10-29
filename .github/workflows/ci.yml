@@ -1,0 +1,129 @@
+name: Workspace checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  foundation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      API_INTERNAL_URL: http://127.0.0.1:8000
+      CGL_APP_ENV: test
+      NEXT_TELEMETRY_DISABLED: "1"
+      UV_CACHE_DIR: ${{ github.workspace }}/.tools/cache/uv
+      UV_PYTHON_INSTALL_DIR: ${{ github.workspace }}/.tools/python
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          cache: npm
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.13"
+      - name: Install locked dependencies
+        run: make bootstrap
+      - name: Check generated API contract
+        run: |
+          make contracts
+          git diff --exit-code -- packages/contracts
+      - name: Formatting, lint, types, and tests
+        run: make check
+      - name: Build frontend
+        run: npm run build
+      - name: Validate local container configuration
+        run: docker compose config --quiet
+      - name: Verify web-to-API routing
+        shell: bash
+        run: |
+          .tools/uv/bin/uv run --project services/backend --frozen uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8000 > /tmp/cgl-api.log 2>&1 &
+          api_pid=$!
+          npm start > /tmp/cgl-web.log 2>&1 &
+          web_pid=$!
+          trap 'kill "$api_pid" "$web_pid" 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:3000/api/v1/health/ready > /dev/null; then
+              npm run smoke
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/cgl-api.log /tmp/cgl-web.log
+          exit 1
+
+  containers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+      - name: Build and start local stack
+        run: docker compose up --build --wait --wait-timeout 120
+      - name: Verify container routing
+        run: node scripts/smoke.mjs
+      - name: Container diagnostics
+        if: failure()
+        run: docker compose logs --no-color
+      - name: Stop containers
+        if: always()
+        run: docker compose down
+
+  database:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+      - name: Install locked backend and browser dependencies
+        run: |
+          make bootstrap-api
+          npm ci
+      - name: Start isolated local PostgreSQL
+        run: |
+          make db-config
+          make db-up
+          make app-config
+          make app-roles
+      - name: PostgreSQL migrations and invariant tests
+        run: make check-db
+      - name: Verify migration container and schema drift
+        run: |
+          make db-migrate
+          make db-check
+      - name: Synthetic evaluation
+        run: make evaluate
+      - name: Full synthetic workspace
+        run: make full-up
+      - name: Install Chromium
+        run: PLAYWRIGHT_BROWSERS_PATH="$PWD/.tools/browsers" npm exec playwright -- install --with-deps chromium
+      - name: Browser review, approval, and export
+        run: make check-e2e
+      - name: Consistent backup and disposable restore drill
+        run: |
+          make backup-local
+          make restore-drill
+      - name: Stop full workspace
+        if: always()
+        run: make full-down
+      - name: Database diagnostics
+        if: failure()
+        run: docker compose --env-file services/backend/.env.database -f compose.database.yaml logs --no-color postgres
+      - name: Stop database stack
+        if: always()
+        run: make db-down

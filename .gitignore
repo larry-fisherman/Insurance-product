@@ -1,0 +1,38 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+!**/.env.example
+*.pem
+*.key
+
+# Dependencies and tooling
+node_modules/
+.tools/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Build/test output
+.next/
+out/
+dist/
+build/
+coverage/
+.coverage
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.tsbuildinfo
+test-results/
+
+# Local data and editor files
+.DS_Store
+.idea/
+*.log
+.data/
+uploads/
+
+.artifacts/
+playwright-report/

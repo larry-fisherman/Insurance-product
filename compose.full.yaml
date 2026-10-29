@@ -1,0 +1,86 @@
+name: cgl-workspace
+
+x-app: &app
+  build:
+    context: .
+    dockerfile: infra/local/api.Dockerfile
+  env_file: services/backend/.env.app
+  environment: &environment
+    CGL_APP_ENV: local
+    CGL_RUNTIME_DATABASE_URL: postgresql+psycopg://cgl_runtime:${CGL_RUNTIME_PASSWORD}@postgres:5432/cgl_dev
+    CGL_AUTH_DATABASE_URL: postgresql+psycopg://cgl_auth:${CGL_AUTH_PASSWORD}@postgres:5432/cgl_dev
+    CGL_REDIS_URL: redis://:${CGL_REDIS_PASSWORD}@redis:6379/0
+    CGL_STORAGE_BACKEND: filesystem
+    CGL_STORAGE_PATH: /data/objects
+    CGL_CLAMAV_HOST: clamav
+    CGL_CLAMAV_PORT: "3310"
+  init: true
+  read_only: true
+  tmpfs: ["/tmp"]
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  networks: [default, database]
+  volumes: [private-files:/data]
+
+services:
+  api:
+    <<: *app
+    ports: ["127.0.0.1:8000:8000"]
+    depends_on:
+      redis: { condition: service_healthy }
+  worker:
+    <<: *app
+    command: celery -A app.worker:celery worker --loglevel=WARNING --concurrency=2 --max-tasks-per-child=25
+    healthcheck: { disable: true }
+    mem_limit: 2g
+    cpus: 2
+    depends_on:
+      redis: { condition: service_healthy }
+  scheduler:
+    <<: *app
+    command: celery -A app.worker:celery beat --loglevel=WARNING --schedule=/tmp/celerybeat
+    healthcheck: { disable: true }
+    depends_on:
+      redis: { condition: service_healthy }
+  redis:
+    image: redis:8.2.2-bookworm
+    environment:
+      REDIS_PASSWORD: ${CGL_REDIS_PASSWORD}
+    command: /bin/sh -c 'exec redis-server --requirepass "$$REDIS_PASSWORD" --appendonly yes --maxmemory 256mb --maxmemory-policy noeviction'
+    ports: ["127.0.0.1:56379:6379"]
+    volumes: [redis:/data]
+    healthcheck:
+      test:
+        ["CMD-SHELL", 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -q PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  clamav:
+    image: clamav/clamav:1.4.3
+    ports: ["127.0.0.1:53310:3310"]
+    volumes: [signatures:/var/lib/clamav]
+    mem_limit: 2g
+    profiles: [scanning]
+  web:
+    build:
+      context: .
+      dockerfile: infra/local/web.Dockerfile
+      args:
+        API_INTERNAL_URL: http://api:8000
+    ports: ["127.0.0.1:3000:3000"]
+    depends_on:
+      api: { condition: service_healthy }
+    init: true
+    read_only: true
+    tmpfs: ["/tmp"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+volumes:
+  redis:
+  private-files:
+  signatures:
+networks:
+  database:
+    external: true
+    name: cgl-database_default

@@ -1,0 +1,11 @@
+node_modules
+.next
+.tools
+.venv
+uv.lock
+package-lock.json
+packages/contracts
+plan.md
+.artifacts
+playwright-report
+test-results
