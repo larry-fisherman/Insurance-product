@@ -1,3 +1,5 @@
+from unittest.mock import Mock
+
 from fastapi.testclient import TestClient
 
 from app.config import Environment, Settings
@@ -38,6 +40,21 @@ def test_openapi_documents_failure_and_success_contracts() -> None:
         assert status["content"]["application/json"]["schema"]["$ref"].endswith(
             "/ReadinessResponse"
         )
+
+
+def test_readiness_does_not_reopen_dependencies_outside_lifespan() -> None:
+    app = create_app(Settings(app_env=Environment.TEST, _env_file=None))
+    dependency = Mock()
+    dependency.identity.side_effect = AssertionError("Inactive application must not open a session")
+    app.state.database = dependency
+    client = TestClient(app)
+    assert client.get("/api/v1/health/ready").status_code == 503
+    with client:
+        app.state.ready = False
+        assert client.get("/api/v1/health/ready").status_code == 503
+    assert client.get("/api/v1/health/ready").status_code == 503
+    dependency.identity.assert_not_called()
+    dependency.close.assert_called_once()
 
 
 def test_product_routes_require_authentication() -> None:

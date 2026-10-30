@@ -69,3 +69,16 @@ Docker was unavailable. Database checks used an isolated native PostgreSQL 16 cl
 The temporary API, web, polling worker, and dedicated PostgreSQL cluster were stopped after verification. Their temporary database and test object directory were removed. This supersedes the historical environment-left-running description above; no remediation test services remain running. Test output, evaluation JSON, browser results, and the fictional screenshot remain in ignored `.artifacts` paths.
 
 Production/synthetic-only startup gates remain unchanged. No customer documents, paid-provider calls, remote CI, public deployment, independent assessment, or new backup/restore drill was performed for this remediation.
+
+## Initial product promise verification — October 30, 2026
+
+Scope: the five-capability acceptance mapping in [review guide](review-guide.md#initial-product-promise-acceptance), explicit MVP priorities in the product requirements/roadmap/agent instructions, and expanded classification/package regression assertions. This verifies supported synthetic behavior; full functional MVP and representative insurance-document acceptance remain open.
+
+- `make check-api`: Ruff lint/format and mypy passed; 62 non-database tests passed.
+- Full backend suite: **115 passed**, including 53 database cases, against a temporary loopback-only native PostgreSQL 16.14 cluster with restricted auth/runtime roles and disposable test databases. A temporary runner supplied process-local configuration without changing private environment files or the developer database. The cluster was stopped and temporary data removed afterward.
+- Expanded package acceptance verifies that all PDF/XLSX/ZIP formats reject export before approval, exported bytes match previews, XLSX schedules/source references contain rows, ZIP contents match standalone files, the reviewed snapshot has decisions and valid source references, and all supporting-file hashes match the manifest. Existing stale-package export rejection remains covered. Classification assertions verify each of the four fictional document types.
+- The first combined run exposed a readiness lifecycle defect: probing after shutdown could reopen a disposed database pool and leave a connection unclosed. Readiness now skips dependency probes while the application lifecycle is inactive; a dedicated regression test covers before startup, inactive state, and after shutdown. The final combined suite passed without warning suppression.
+- `make evaluate`: 100 generated explicit-label extraction/reconciliation packets passed. No external provider calls; this evaluation does not measure unsupported package statements, independent held-out accuracy, or human correction effort.
+- Changed Markdown passed Prettier and local link/anchor checks; `git diff --check` passed.
+
+Docker was unavailable. Browser, Redis delivery, ClamAV ordinary-upload, and actual OCR acceptance were not rerun for this change; prior dated results remain historical. No customer data, paid-provider usage, deployment, or release authorization was performed. Parser breadth, complete contextual CGL semantics, domain-approved requirements, independent quality/security assessment, and customer-data gates remain open.

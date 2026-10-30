@@ -1,10 +1,14 @@
 """Real runtime-role tests; requests do not run as the migration owner."""
 
+import io
+import json
+import zipfile
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+import openpyxl
 import pyotp
 import pytest
 import sqlalchemy as sa
@@ -12,6 +16,7 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from sqlalchemy.engine import Engine, make_url
 
+from app.common import digest
 from app.config import Environment, Settings
 from app.database.runtime import Database
 from app.domain.models import ProcessingJob
@@ -120,9 +125,13 @@ def test_end_to_end_review_approval_export_and_staleness(
     process_pending(workspace_settings, actor)
     detail = client.get("/api/v1/packages/" + package_id).json()
     assert detail["package"]["status"] == "ready", detail
-    assert client.get(f"/api/v1/packages/{package_id}/artifacts/pdf").status_code == 409
-    preview = client.get(f"/api/v1/packages/{package_id}/artifacts/pdf?preview=true")
-    assert preview.status_code == 200 and preview.content.startswith(b"%PDF")
+    previews = {}
+    for format in ("pdf", "xlsx", "zip"):
+        assert client.get(f"/api/v1/packages/{package_id}/artifacts/{format}").status_code == 409
+        preview = client.get(f"/api/v1/packages/{package_id}/artifacts/{format}?preview=true")
+        assert preview.status_code == 200
+        previews[format] = preview.content
+    assert previews["pdf"].startswith(b"%PDF")
     approved = post(
         client,
         f"/packages/{package_id}/approvals",
@@ -132,10 +141,33 @@ def test_end_to_end_review_approval_export_and_staleness(
         },
     )
     assert approved.status_code == 200, approved.text
-    exported = client.get(f"/api/v1/packages/{package_id}/artifacts/pdf")
-    assert exported.status_code == 200 and exported.content == preview.content
-    archive = client.get(f"/api/v1/packages/{package_id}/artifacts/zip")
-    assert archive.status_code == 200 and archive.content.startswith(b"PK")
+    for format, content in previews.items():
+        exported = client.get(f"/api/v1/packages/{package_id}/artifacts/{format}")
+        assert exported.status_code == 200 and exported.content == content
+    workbook = openpyxl.load_workbook(io.BytesIO(previews["xlsx"]))
+    assert {"Exposure schedule", "Coverage schedule", "Loss schedule", "Source references"} <= set(
+        workbook.sheetnames
+    )
+    assert workbook["Exposure schedule"].max_row > 1
+    assert workbook["Coverage schedule"].max_row > 1
+    assert workbook["Loss schedule"].max_row > 1
+    assert workbook["Source references"].max_row > 1
+    workbook.close()
+    with zipfile.ZipFile(io.BytesIO(previews["zip"])) as archive:
+        assert archive.read("submission.pdf") == previews["pdf"]
+        assert archive.read("submission.xlsx") == previews["xlsx"]
+        snapshot = json.loads(archive.read("reviewed-snapshot.json"))
+        manifest = json.loads(archive.read("manifest.json"))
+        assert digest(archive.read("reviewed-snapshot.json")) == manifest["revision_hash"]
+        assert snapshot["facts"] and all(fact["decision_id"] for fact in snapshot["facts"])
+        source_ids = {source["id"] for source in manifest["source_index"]}
+        assert source_ids and all(
+            set(fact["source_ids"]) <= source_ids for fact in snapshot["facts"]
+        )
+        assert len(manifest["documents"]) == 4
+        assert len(manifest["files"]) == 6  # PDF, XLSX, and all four supporting documents.
+        for file in manifest["files"]:
+            assert digest(archive.read(file["filename"])) == file["sha256"]
     # Excluding a document is material and invalidates the approval for current export.
     doc_id = data["documents"][0]["id"]
     assert (

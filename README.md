@@ -1,6 +1,12 @@
-# CGL Workspace
+# Insurance document intelligence and workflow platform
 
-A local, synthetic-data implementation of the CGL submission workflow: document intake → extraction with sources → reconciliation → broker review → versioned submission package → approval → manual export.
+An insurance document intelligence and workflow platform with Commercial General Liability (CGL) as its first implementation. The local, synthetic-data build implements the CGL submission workflow: document intake → extraction with sources → reconciliation → broker review → versioned submission package → approval → manual export.
+
+Shared ingestion, extraction infrastructure, citations, authentication, exceptions, review/approval, and export support line-specific schemas, reconciliation rules, requirements, forms, and summaries. The current build still contains CGL coupling; the reusable domain boundary is documented as a target architecture.
+
+Project context: [product requirements](docs/PRODUCT_REQUIREMENTS.md), [architecture](docs/ARCHITECTURE.md), [data model](docs/DATA_MODEL.md), [security](docs/SECURITY.md), and [roadmap](docs/ROADMAP.md). Future coding sessions should start with [AGENTS.md](AGENTS.md).
+
+**Initial product promise:** Upload the documents. Identify missing or conflicting underwriting information. Review the facts. Generate a submission-ready package. See the [acceptance checklist](docs/review-guide.md#initial-product-promise-acceptance) for implemented checks and remaining validation.
 
 **Use fictional documents only.** Staging and production startup, and disabling synthetic mode, fail closed. This is an engineering review build; real-data and paid-pilot approval gates remain in [docs/pilot-readiness.md](docs/pilot-readiness.md). No ACORD forms, carrier distribution, coverage recommendations, or binding actions are implemented.
 

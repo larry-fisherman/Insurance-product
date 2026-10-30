@@ -148,7 +148,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def ready(request: Request) -> ReadinessResponse | JSONResponse:
         """Application lifespan started. Dependency checks will be added as implemented."""
         dependency_ready = True
-        if request.app.state.database:
+        if request.app.state.ready and request.app.state.database:
             try:
                 with request.app.state.database.identity() as session:
                     session.execute(sa.text("SELECT 1"))

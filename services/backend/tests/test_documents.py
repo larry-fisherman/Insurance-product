@@ -92,13 +92,21 @@ def test_comparison_respects_basis_period_scope_and_role() -> None:
 
 def test_pdf_and_spreadsheet_synthetic_sources_are_preserved() -> None:
     documents = fixtures()
+    expected_types = {
+        "CGL-application.pdf": "application",
+        "Expiring-policy.pdf": "policy",
+        "Loss-runs.pdf": "loss_runs",
+        "Sales-schedule.xlsx": "exposure_schedule",
+    }
     observations = []
     for filename, data in documents:
         media = validate_file(filename, data)
         blocks, count = parse_pdf(data) if media == "application/pdf" else parse_xlsx(data)
         assert count > 0 and blocks
         lookup = {block.id: block for block in blocks}
-        extracted = local_extract(blocks, classify(blocks))
+        document_type = classify(blocks)
+        assert document_type == expected_types[filename]
+        extracted = local_extract(blocks, document_type)
         assert extracted
         for fact in extracted:
             assert all(ref in lookup for ref in fact.source_ids)
