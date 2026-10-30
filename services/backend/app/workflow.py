@@ -1,5 +1,6 @@
 """Deterministic review, readiness and immutable canonical revision services."""
 
+import re
 from collections import defaultdict
 from datetime import date
 from decimal import Decimal
@@ -13,6 +14,7 @@ from app.common import audit, canonical_json, digest, fail, record
 from app.database.models import Membership, MembershipRole, OutboxEvent, Permission, RolePermission
 from app.domain.cgl import (
     FIELD_LABELS,
+    REQUIREMENT_PROFILE,
     fingerprint,
     group_key,
     reconcile,
@@ -27,6 +29,7 @@ from app.domain.models import (
     Observation,
     ProcessingJob,
     ReviewDecision,
+    SourceBlock,
     Submission,
 )
 from app.identity import Scope
@@ -52,10 +55,25 @@ def version_check(submission: Submission, expected: int) -> None:
         )
 
 
+def ensure_open(submission: Submission) -> None:
+    if submission.status in {"closed", "cancelled"}:
+        fail(
+            409,
+            "SUBMISSION_TERMINAL",
+            "This submission is closed or cancelled. Create a renewal or a new submission to continue.",
+        )
+
+
 def idempotent(scope: Scope, operation: str, key: str | None, value: Any) -> tuple[UUID, bool]:
     if not key or not 8 <= len(key) <= 100:
         fail(400, "IDEMPOTENCY_REQUIRED", "Supply an Idempotency-Key of 8–100 characters.")
     assert key is not None
+    # Serialize identical keys before checking/inserting, including concurrent creates.
+    # A transaction-scoped lock releases automatically on commit or rollback.
+    scope.session.execute(
+        sa.text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+        {"key": f"{scope.tenant_id}:{operation}:{key}"},
+    )
     request_hash = digest(canonical_json(value))
     existing = scope.session.scalar(
         sa.select(IdempotencyRecord).where(
@@ -84,20 +102,73 @@ def idempotent(scope: Scope, operation: str, key: str | None, value: Any) -> tup
     return response_id, False
 
 
-def active_documents(session: Session, submission_id: UUID) -> list[DocumentVersion]:
+def submission_documents(session: Session, submission_id: UUID) -> list[DocumentVersion]:
     return list(
         session.scalars(
             sa.select(DocumentVersion)
             .where(
                 DocumentVersion.submission_id == submission_id,
-                DocumentVersion.excluded_reason.is_(None),
             )
             .order_by(DocumentVersion.created_at)
         )
     )
 
 
+def active_documents(session: Session, submission_id: UUID) -> list[DocumentVersion]:
+    return [d for d in submission_documents(session, submission_id) if not d.excluded_reason]
+
+
+def document_inventory(session: Session, submission_id: UUID) -> list[dict[str, Any]]:
+    documents = submission_documents(session, submission_id)
+    observations = list(
+        session.scalars(sa.select(Observation).where(Observation.submission_id == submission_id))
+    )
+    return [
+        {
+            "id": str(d.id),
+            "filename": d.filename,
+            "sha256": d.sha256,
+            "included_in_exhibits": not bool(d.excluded_reason),
+            "excluded_reason": d.excluded_reason,
+            "excluded_by": str(d.excluded_by) if d.excluded_by else None,
+            "excluded_at": d.excluded_at.isoformat() if d.excluded_at else None,
+            "supersedes_id": str(d.supersedes_id) if d.supersedes_id else None,
+            "replaced_by": [str(r.id) for r in documents if r.supersedes_id == d.id],
+            "scan_status": d.scan_status,
+            "processing_status": d.processing_status,
+            "affected_requirements": sorted(
+                {o.field for o in observations if o.document_id == d.id}
+            ),
+            "processing_inventory": d.processing_inventory,
+            "source_assertions": [
+                {
+                    "id": str(o.id),
+                    "field": o.field,
+                    "value": o.value,
+                    "context": o.context,
+                    "availability": o.availability,
+                    "source_ids": [str(o.source_id), *o.supporting_source_ids],
+                }
+                for o in observations
+                if o.document_id == d.id
+            ],
+        }
+        for d in documents
+    ]
+
+
 def observation_groups(session: Session, submission_id: UUID) -> list[dict[str, Any]]:
+    active_source_ids = {
+        str(ref)
+        for ref in session.scalars(
+            sa.select(SourceBlock.id)
+            .join(DocumentVersion, DocumentVersion.id == SourceBlock.document_id)
+            .where(
+                DocumentVersion.submission_id == submission_id,
+                DocumentVersion.excluded_reason.is_(None),
+            )
+        )
+    }
     rows = session.scalars(
         sa.select(Observation)
         .join(DocumentVersion, DocumentVersion.id == Observation.document_id)
@@ -125,6 +196,28 @@ def observation_groups(session: Session, submission_id: UUID) -> list[dict[str, 
         decision = latest.get(key)
         current = fingerprint(observations)
         valid = decision is not None and decision.input_fingerprint == current
+        if valid and decision and decision.action == "approve":
+            selected = next(
+                (o for o in observations if o["id"] == str(decision.observation_id)), None
+            )
+            if (
+                not selected
+                or selected.get("support_status", "supported") != "supported"
+                or selected.get("availability", "available") != "available"
+            ):
+                valid = False
+        # Legacy corrections must be re-reviewed with an explicit support choice.
+        if valid and decision and decision.action == "correct" and not decision.support:
+            valid = False
+        if (
+            valid
+            and decision
+            and decision.action == "correct"
+            and decision.support.get("type") == "document"
+        ):
+            valid = bool(decision.support.get("source_ids")) and set(
+                decision.support["source_ids"]
+            ).issubset(active_source_ids)
         source = observations[0] if observations else (record(decision) if decision else {})
         result.append(
             {
@@ -135,6 +228,40 @@ def observation_groups(session: Session, submission_id: UUID) -> list[dict[str, 
                 "observations": observations,
                 "fingerprint": current,
                 "conflicting": len({canonical_json(o["value"]) for o in observations}) > 1,
+                "decision": record(decision) if decision else None,
+                "verified": valid,
+                "state": decision.action if valid and decision else "unreviewed",
+            }
+        )
+    submission = get(session, Submission, submission_id)
+    for candidate in submission.renewal_candidates:
+        key = candidate["key"]
+        decision = latest.get(key)
+        current = digest(canonical_json(candidate))
+        valid = bool(
+            decision
+            and decision.input_fingerprint == current
+            and (decision.action == "omit" or decision.action == "correct" and decision.support)
+        )
+        if (
+            valid
+            and decision
+            and decision.action == "correct"
+            and decision.support.get("type") == "document"
+        ):
+            valid = bool(decision.support.get("source_ids")) and set(
+                decision.support["source_ids"]
+            ).issubset(active_source_ids)
+        result.append(
+            {
+                "key": key,
+                "field": candidate["field"],
+                "label": FIELD_LABELS[candidate["field"]],
+                "context": candidate["context"],
+                "candidate": candidate,
+                "observations": [],
+                "fingerprint": current,
+                "conflicting": False,
                 "decision": record(decision) if decision else None,
                 "verified": valid,
                 "state": decision.action if valid and decision else "unreviewed",
@@ -181,14 +308,24 @@ def approved_facts(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for group in groups:
         decision = group["decision"]
         if group["verified"] and decision and decision["action"] in {"approve", "correct"}:
-            source_ids: list[str] = []
-            if decision["observation_id"]:
-                selected = next(
-                    (o for o in group["observations"] if o["id"] == decision["observation_id"]),
-                    None,
-                )
-                if selected:
-                    source_ids = [selected["source_id"], *selected["supporting_source_ids"]]
+            selected = next(
+                (o for o in group["observations"] if o["id"] == decision["observation_id"]), None
+            )
+            original_sources = (
+                [selected["source_id"], *selected["supporting_source_ids"]] if selected else []
+            )
+            if decision["action"] == "correct" and not selected:
+                original_sources = [
+                    ref
+                    for o in group["observations"]
+                    for ref in [o["source_id"], *o["supporting_source_ids"]]
+                ]
+            support = decision.get("support", {})
+            source_ids = (
+                original_sources
+                if decision["action"] == "approve"
+                else support.get("source_ids", [])
+            )
             facts.append(
                 {
                     "group_key": group["key"],
@@ -200,6 +337,11 @@ def approved_facts(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "reason": decision["reason"],
                     "source_ids": list(dict.fromkeys(source_ids)),
                     "evidence_type": "document" if source_ids else "broker_attestation",
+                    "attestation_origin": support.get("origin"),
+                    "original_source_ids": original_sources
+                    if decision["action"] == "correct"
+                    else [],
+                    "renewal_lineage": group.get("candidate"),
                 }
             )
     return facts
@@ -210,10 +352,72 @@ def readiness(session: Session, submission: Submission) -> dict[str, Any]:
     facts = approved_facts(groups)
     blockers: list[dict[str, Any]] = []
     exceptions: list[dict[str, Any]] = []
-    documents = active_documents(session, submission.id)
+    documents = submission_documents(session, submission.id)
+    inventory = document_inventory(session, submission.id)
     document_missing: list[tuple[str, str]] = []
     extracted_documents = {o["document_id"] for group in groups for o in group["observations"]}
     for doc in documents:
+        if doc.excluded_reason:
+            entry = next(d for d in inventory if d["id"] == str(doc.id))
+            document_missing.append(
+                (
+                    "missing:excluded:" + str(doc.id),
+                    f"Excluded document {doc.filename} ({doc.processing_status}); reason: {doc.excluded_reason}. "
+                    f"Affected fields: {', '.join(entry['affected_requirements']) or 'unknown; manual completeness review required'}. "
+                    f"Replacement versions: {', '.join(entry['replaced_by']) or 'none'}. "
+                    f"Lost source assertions: {len(entry['source_assertions'])}; see excluded source inventory. Confirm lost material information and replacement adequacy.",
+                )
+            )
+            continue
+        segments = doc.processing_inventory.get("segments", [])
+        if doc.document_type == "policy":
+            segments = [
+                {"type": "policy", "source_ids": doc.processing_inventory.get("source_order", [])}
+            ]
+        for index, segment in enumerate(segments):
+            if segment.get("type") != "policy":
+                continue
+            refs = set(segment.get("source_ids", []))
+            present = {
+                entry["field"]
+                for entry in doc.processing_inventory.get("fields", [])
+                if entry.get("support_status", "supported") == "supported"
+                and entry.get("context", {}).get("role") in {"existing", "historical"}
+                and entry.get("source_ids")
+                and (not refs or entry["source_ids"][0] in refs)
+            }
+            required_policy_fields = {
+                "policy.number",
+                "policy.effective",
+                "policy.expiration",
+                "coverage.each_occurrence",
+                "coverage.general_aggregate",
+            }
+            absent = sorted(required_policy_fields - present)
+            if absent:
+                document_missing.append(
+                    (
+                        f"missing:policy_inventory:{doc.id}:{index}",
+                        f"{doc.filename}: policy content is incomplete; fields not supplied/extracted in this segment: "
+                        + ", ".join(FIELD_LABELS[field] for field in absent)
+                        + ". Review the original and disclose any permitted omission.",
+                    )
+                )
+        for page in doc.processing_inventory.get("pages", []):
+            if page.get("page_status") in {"unresolved", "unreadable", "partial"}:
+                document_missing.append(
+                    (
+                        f"missing:page:{doc.id}:{page.get('page')}",
+                        f"{doc.filename}: page {page.get('page')} remains {page['page_status']}. Confirm the missing content.",
+                    )
+                )
+        for issue in doc.processing_inventory.get("issues", []):
+            document_missing.append(
+                (
+                    f"missing:parse:{doc.id}:{issue['source_id']}",
+                    f"{doc.filename}: {issue['message']} (source {issue['source_id']}).",
+                )
+            )
         if doc.scan_status != "clean" or doc.processing_status != "completed":
             blockers.append(
                 {
@@ -238,13 +442,19 @@ def readiness(session: Session, submission: Submission) -> dict[str, Any]:
                     "waivable": False,
                 }
             )
-        elif group["state"] in {"omit", "reject"}:
-            exceptions.append(
-                {
-                    "key": group["key"],
-                    "message": "Omitted: " + group["label"],
-                    "reason": group["decision"]["reason"],
-                }
+        elif group["state"] == "omit":
+            document_missing.append(
+                (
+                    "missing:omission:" + group["key"],
+                    "Proposed omission: "
+                    + group["label"]
+                    + "; context: "
+                    + canonical_json(group["context"])
+                    + "; source assertions: "
+                    + canonical_json([o["raw_value"] for o in group["observations"]])
+                    + "; preparer reason: "
+                    + group["decision"]["reason"],
+                )
             )
     comparable: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for fact in facts:
@@ -285,6 +495,78 @@ def readiness(session: Session, submission: Submission) -> dict[str, Any]:
                 }
             )
     missing: list[tuple[str, str]] = list(document_missing)
+    supplied_forms = [f for f in facts if f["field"] == "policy.endorsement_form"]
+    for fact in facts:
+        if fact["field"] == "policy.referenced_endorsement" or (
+            fact["field"] == "coverage.endorsement"
+            and re.search(r"\b(attached|refer to|see form)\b", str(fact["value"]), re.I)
+        ):
+            reference = str(fact["value"]).split(" - ")[0].strip()
+            if not any(
+                (
+                    str(form["value"]) == reference
+                    or str(form["value"]).startswith(reference + " - ")
+                )
+                and all(
+                    form["context"].get(key) == fact["context"].get(key)
+                    for key in ("policy_reference", "role", "scope")
+                )
+                for form in supplied_forms
+            ):
+                missing.append(
+                    (
+                        "missing:endorsement:" + fact["group_key"],
+                        "Referenced endorsement wording has not been verified: "
+                        + str(fact["value"]),
+                    )
+                )
+    policy_fields: dict[str, set[str]] = defaultdict(set)
+    for fact in facts:
+        if fact["field"].startswith("policy.") and fact["context"].get("policy_reference"):
+            policy_fields[str(fact["context"]["policy_reference"])].add(fact["field"])
+    for reference, supplied in policy_fields.items():
+        for required in ("policy.number", "policy.effective", "policy.expiration"):
+            if required not in supplied:
+                missing.append(
+                    (
+                        "missing:policy_field:" + digest(reference + required)[:20],
+                        f"{FIELD_LABELS[required]} is not verified for policy {reference}.",
+                    )
+                )
+    # This versioned local profile is provisional until domain sign-off. Each supplied
+    # policy/request context needs its core limit pair; a single verified limit is insufficient.
+    coverage_contexts: dict[str, set[str]] = defaultdict(set)
+    for fact in facts:
+        if fact["field"].startswith("coverage.") and fact["field"] not in {
+            "coverage.trigger",
+            "coverage.endorsement",
+            "coverage.additional_insured",
+        }:
+            coverage_contexts[canonical_json(fact["context"])].add(fact["field"])
+    for context_key, supplied in coverage_contexts.items():
+        for required in ("coverage.each_occurrence", "coverage.general_aggregate"):
+            if required not in supplied:
+                missing.append(
+                    (
+                        "missing:coverage_field:" + digest(context_key + required)[:20],
+                        f"{FIELD_LABELS[required]} is not verified for {context_key}.",
+                    )
+                )
+    for group in groups:
+        unavailable = [
+            o for o in group["observations"] if o.get("availability", "available") != "available"
+        ]
+        if unavailable and not any(f["group_key"] == group["key"] for f in facts):
+            missing.append(
+                (
+                    "missing:availability:" + group["key"],
+                    group["label"]
+                    + " source availability: "
+                    + ", ".join(sorted({o["availability"] for o in unavailable}))
+                    + "; source values: "
+                    + canonical_json([o["raw_value"] for o in unavailable]),
+                )
+            )
     insured = get(session, InsuredAccount, submission.insured_id)
 
     def normalized_text(value: str) -> str:
@@ -300,7 +582,7 @@ def readiness(session: Session, submission: Submission) -> dict[str, Any]:
                 "The reviewed legal insured name differs from the account directory. Confirm the correct entity and document the relationship or correct the record.",
             )
         )
-    if not any(field.startswith("coverage.") for field in fields):
+    if not coverage_contexts:
         missing.append(
             (
                 "missing:coverage",
@@ -384,6 +666,16 @@ def readiness(session: Session, submission: Submission) -> dict[str, Any]:
                 }
             )
     for fact in facts:
+        if fact["field"] == "exposure.amount" and (
+            fact["context"].get("basis") == "unknown"
+            or fact["context"].get("unit") in {None, "unknown"}
+        ):
+            missing.append(
+                (
+                    "missing:exposure_basis:" + fact["group_key"],
+                    "Exposure basis or unit is unknown: " + canonical_json(fact["context"]),
+                )
+            )
         if fact["field"] == "operations.class_code" and not fact["context"].get(
             "classification_system"
         ):
@@ -402,6 +694,14 @@ def readiness(session: Session, submission: Submission) -> dict[str, Any]:
             )
         if fact["field"] == "loss.claim":
             value = fact["value"]
+            for component in ("paid", "reserves", "incurred"):
+                if value.get(component) is None:
+                    missing.append(
+                        (
+                            "missing:claim_amount:" + fact["group_key"] + ":" + component,
+                            f"Claim {value['claim_id']} has no supplied {component} amount. Missing amounts are not zero.",
+                        )
+                    )
             amounts = [value.get(key) for key in ("paid", "reserves", "incurred")]
             if all(amount is not None for amount in amounts) and Decimal(amounts[0]) + Decimal(
                 amounts[1]
@@ -433,6 +733,9 @@ def readiness(session: Session, submission: Submission) -> dict[str, Any]:
                 "input": submission.input_version,
                 "requirements": submission.requirements,
                 "facts": facts,
+                "documents": inventory,
+                "decisions": [g["decision"] for g in groups],
+                "profile": REQUIREMENT_PROFILE,
             }
         )
     )
@@ -449,6 +752,8 @@ def readiness(session: Session, submission: Submission) -> dict[str, Any]:
                     "key": key,
                     "message": message,
                     "reason": resolution.resolution_reason if resolution else None,
+                    "accepted_by": str(resolution.resolved_by) if resolution else None,
+                    "input_fingerprint": missing_hash,
                 }
             )
         else:
@@ -456,6 +761,8 @@ def readiness(session: Session, submission: Submission) -> dict[str, Any]:
                 {"key": key, "message": message, "waivable": True, "fingerprint": missing_hash}
             )
     return {
+        "requirement_profile": REQUIREMENT_PROFILE,
+        "document_inventory": inventory,
         "ready": not blockers,
         "blockers": blockers,
         "exceptions": exceptions,
@@ -470,7 +777,9 @@ def readiness(session: Session, submission: Submission) -> dict[str, Any]:
 def save_revision(scope: Scope, submission: Submission) -> CanonicalRevision:
     state = readiness(scope.session, submission)
     snapshot = {
-        "schema_version": "cgl-1",
+        "schema_version": "cgl-2",
+        "requirement_profile": REQUIREMENT_PROFILE,
+        "document_inventory": state["document_inventory"],
         "submission_id": str(submission.id),
         "intended_start": str(submission.intended_start),
         "intended_end": str(submission.intended_end),
@@ -479,7 +788,16 @@ def save_revision(scope: Scope, submission: Submission) -> CanonicalRevision:
         "omissions": [
             {"group_key": g["key"], "reason": g["decision"]["reason"]}
             for g in state["groups"]
-            if g["verified"] and g["state"] in {"omit", "reject"}
+            if g["verified"] and g["state"] == "omit"
+        ],
+        "rejections": [
+            {
+                "group_key": g["key"],
+                "reason": g["decision"]["reason"],
+                "observation_ids": [o["id"] for o in g["observations"]],
+            }
+            for g in state["groups"]
+            if g["verified"] and g["state"] == "reject"
         ],
     }
     submission.revision_number += 1
@@ -555,6 +873,7 @@ def review(
     scope: Scope, submission: Submission, decisions: list[dict[str, Any]]
 ) -> CanonicalRevision:
     scope.require("reviews.write")
+    ensure_open(submission)
     groups = {g["key"]: g for g in observation_groups(scope.session, submission.id)}
     keys = [item["group_key"] for item in decisions]
     if len(set(keys)) != len(keys):
@@ -597,6 +916,98 @@ def review(
                 fail(422, "INVALID_FACT", str(error))
         else:
             value = None
+        support: dict[str, Any] = {}
+        if (
+            item["action"] == "approve"
+            and selected
+            and (
+                selected.get("availability", "available") != "available"
+                or selected.get("support_status", "supported") != "supported"
+            )
+        ):
+            fail(
+                422,
+                "UNSUPPORTED_EVIDENCE",
+                "Supply supported evidence or an explicit broker attestation for this field.",
+            )
+        if item["action"] == "reject":
+            if (
+                not group
+                or not group["observations"]
+                or any(
+                    o.get("support_status", "supported") != "unsupported"
+                    for o in group["observations"]
+                )
+            ):
+                fail(
+                    422,
+                    "OMISSION_REQUIRED",
+                    "Supported or unavailable source information requires an omission disposition, not rejection as an incorrect extraction.",
+                )
+            support = {"rejection": "incorrect_extraction"}
+        if item["action"] == "correct":
+            support_type = item.get("support_type")
+            if support_type == "broker_attestation":
+                origin = item.get("attestation_origin", "").strip()
+                if len(origin) < 5:
+                    fail(
+                        422,
+                        "ATTESTATION_ORIGIN_REQUIRED",
+                        "Record who supplied the corrected information and how/when it was confirmed.",
+                    )
+                support = {"type": support_type, "origin": origin, "source_ids": []}
+            elif support_type == "document":
+                from app.documents import Block, supports_fact
+
+                refs = [UUID(str(ref)) for ref in item.get("support_source_ids", [])]
+                blocks_by_doc: dict[UUID, list[Block]] = defaultdict(list)
+                for source in scope.session.scalars(
+                    sa.select(SourceBlock)
+                    .join(DocumentVersion, DocumentVersion.id == SourceBlock.document_id)
+                    .where(
+                        DocumentVersion.submission_id == submission.id,
+                        DocumentVersion.excluded_reason.is_(None),
+                    )
+                    .order_by(SourceBlock.created_at, SourceBlock.id)
+                ):
+                    blocks_by_doc[source.document_id].append(
+                        Block(source.text, source.locator, source.id)
+                    )
+                # Creation timestamps can tie; locators restore stable source order.
+                for blocks in blocks_by_doc.values():
+                    blocks.sort(
+                        key=lambda b: (
+                            b.locator.get("sheet", ""),
+                            b.locator.get("page", 0),
+                            b.locator.get("line", 0),
+                            int(re.findall(r"\d+", b.locator.get("range", "A0"))[0]),
+                        )
+                    )
+                if any(
+                    ref not in {b.id for blocks in blocks_by_doc.values() for b in blocks}
+                    for ref in refs
+                ):
+                    fail(
+                        422,
+                        "INVALID_EVIDENCE",
+                        "Supporting sources must belong to active documents in this submission.",
+                    )
+                if not refs or not any(
+                    supports_fact(blocks, field, value, context, refs)
+                    for blocks in blocks_by_doc.values()
+                ):
+                    fail(
+                        422,
+                        "UNSUPPORTED_CORRECTION",
+                        "The cited evidence does not support this corrected value and context.",
+                    )
+                support = {"type": "document", "source_ids": [str(ref) for ref in refs]}
+            else:
+                fail(
+                    422,
+                    "CORRECTION_SUPPORT_REQUIRED",
+                    "Choose supporting document evidence or an attributed broker attestation.",
+                )
         row = ReviewDecision(
             tenant_id=scope.tenant_id,
             submission_id=submission.id,
@@ -610,6 +1021,7 @@ def review(
             observation_id=UUID(selected["id"]) if selected else None,
             reason=item["reason"],
             reviewer_id=scope.actor.user_id,
+            support=support,
         )
         scope.session.add(row)
     scope.session.flush()

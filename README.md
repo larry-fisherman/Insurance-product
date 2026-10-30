@@ -4,7 +4,9 @@ A local, synthetic-data implementation of the CGL submission workflow: document 
 
 **Use fictional documents only.** Staging and production startup, and disabling synthetic mode, fail closed. This is an engineering review build; real-data and paid-pilot approval gates remain in [docs/pilot-readiness.md](docs/pilot-readiness.md). No ACORD forms, carrier distribution, coverage recommendations, or binding actions are implemented.
 
-## Start the complete workspace
+See [review remediation](docs/review-remediation.md) for the fixes to `review.md`, required migrations, and remaining functional/release gaps.
+
+## Start the local workspace
 
 Prerequisites: Git, Docker Desktop with Compose, Node 24, npm, Python 3, and network access to package/container registries. Allow approximately 6 GB for Docker when running the scanner and browser tests.
 

@@ -1,4 +1,4 @@
-# ADR 0003: Complete local review MVP
+# ADR 0003: Local synthetic review build
 
 Status: implemented for synthetic local/test use. Date: October 29, 2026.
 
@@ -39,3 +39,7 @@ Generated prose is a deterministic narrative from approved fields. LLM-written u
 ## Commercial boundaries
 
 No real data or production configuration is enabled. Security controls are engineering evidence, not legal compliance. Customer discovery, licensed expert evaluation, vendor terms, independent security assessment, real infrastructure encryption/restore tests, privacy/retention agreements, support/incident staffing, and pricing validation remain explicit gates.
+
+## Review follow-up
+
+The review against `plan.md` found functional and evidence-integrity gaps. [Review remediation](../review-remediation.md) records the current changes and open work. This ADR does not establish complete MVP acceptance or narrow the plan without domain approval.

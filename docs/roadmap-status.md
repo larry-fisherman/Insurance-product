@@ -1,6 +1,6 @@
 # Roadmap status at engineering review
 
-This maps the original plan to the delivered synthetic build. “Implemented” describes software in the repository; it does not replace the phase acceptance conditions that require customer, domain, legal, or external infrastructure evidence.
+This maps the original plan to the delivered synthetic build. [Review remediation](review-remediation.md) is the current detailed record of defect fixes and outstanding functional gaps; the table below is not a statement that all engineering phases are complete. “Implemented” describes software in the repository; it does not replace the phase acceptance conditions that require customer, domain, legal, or external infrastructure evidence.
 
 | Plan phase                    | Engineering delivery                                                                                                             | Remaining validation / release work                                                                                                    |
 | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |

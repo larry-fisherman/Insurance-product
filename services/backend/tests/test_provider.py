@@ -97,3 +97,74 @@ def test_provider_refusal_and_incomplete_response_stop_extraction(
     install_response(monkeypatch, {"status": "incomplete", "output": []})
     with pytest.raises(DocumentError, match="PROVIDER_INCOMPLETE"):
         provider_extract([block], configuration())
+
+
+@pytest.mark.parametrize(
+    "field,overrides",
+    [
+        ("coverage.each_occurrence", {}),
+        ("coverage.general_aggregate", {"role": "requested"}),
+        ("coverage.general_aggregate", {"policy_reference": "INVENTED-POLICY"}),
+        ("coverage.general_aggregate", {"scope": "Invented location"}),
+    ],
+)
+def test_provider_same_number_wrong_meaning_is_explicitly_unsupported(
+    monkeypatch: pytest.MonkeyPatch, field: str, overrides: dict[str, str]
+) -> None:
+    block = Block("General aggregate limit: USD 2000000", {"kind": "pdf", "page": 1})
+    context = Context(role="existing", currency="USD").model_copy(update=overrides)
+    install_response(
+        monkeypatch,
+        response(
+            [
+                {
+                    "field": field,
+                    "value_json": json.dumps("2000000"),
+                    "context": context.model_dump(mode="json"),
+                    "source_ids": [str(block.id)],
+                }
+            ]
+        ),
+    )
+    fact = provider_extract([block], configuration())[0]
+    assert fact.support_status == "unsupported"
+    assert any("Unsupported field or context" in w for w in fact.warnings)
+
+
+def test_provider_paid_reserve_swap_cannot_pass_numeric_presence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.domain.cgl import Claim
+
+    blocks = [
+        Block("Currency: USD", {"kind": "pdf", "page": 1}),
+        Block(
+            "Claim: C1 | carrier=Demo | policy=P1 | paid=100 | reserves=200 | incurred=300 | valuation=2026-10-29",
+            {"kind": "pdf", "page": 1},
+        ),
+    ]
+    claim = Claim.model_validate(
+        {
+            "claim_id": "C1",
+            "carrier": "Demo",
+            "policy": "P1",
+            "paid": "200",
+            "reserves": "100",
+            "incurred": "300",
+            "valuation": "2026-10-29",
+        }
+    )
+    install_response(
+        monkeypatch,
+        response(
+            [
+                {
+                    "field": "loss.claim",
+                    "value_json": claim.model_dump_json(),
+                    "context": Context(currency="USD").model_dump(mode="json"),
+                    "source_ids": [str(b.id) for b in blocks],
+                }
+            ]
+        ),
+    )
+    assert provider_extract(blocks, configuration())[0].support_status == "unsupported"

@@ -55,6 +55,19 @@ test("fictional brokerage reviews evidence, approves exact files, and exports", 
     .filter({ has: page.getByRole("heading", { name: "Exposure", exact: true }) });
   await expect(sales.getByText("conflict", { exact: true })).toBeVisible();
   await expect(sales.locator("input[type=radio]:checked")).toHaveCount(0);
+  await page.getByText("View cited PDF page", { exact: true }).first().click();
+  await expect(page.locator("iframe[title^='Cited page']").first()).toBeVisible();
+  const citedPdf = await page
+    .locator("iframe[title^='Cited page']")
+    .first()
+    .getAttribute("src");
+  expect(citedPdf).toContain("inline=true#page=");
+  const citedResponse = await page.request.get(citedPdf!.split("#")[0]);
+  expect(citedResponse.headers()["content-disposition"]).toContain("inline");
+  await page.getByText("View cited spreadsheet cells", { exact: true }).first().click();
+  await expect(
+    page.getByRole("columnheader", { name: "Cell", exact: true }).first(),
+  ).toBeVisible();
   let count = await page.locator(".review-card").count();
   for (let step = 0; step < 50 && count > 0; step++) {
     const card = page.locator(".review-card").first();

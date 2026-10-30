@@ -1,5 +1,12 @@
 "use client";
-import { useCallback, useEffect, useState, type ReactNode, type FormEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type FormEvent,
+} from "react";
 import { useRouter } from "next/navigation";
 import { api, ApiError, label } from "../../lib/workspace-api";
 
@@ -143,7 +150,48 @@ export function Form({
 }) {
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
-    [saved, setSaved] = useState(false);
+    [saved, setSaved] = useState(false),
+    [dirty, setDirty] = useState(false);
+  const formRef = useRef<HTMLFormElement>(null);
+  const dirtyRef = useRef(false);
+  useEffect(() => {
+    if (!dirty) return;
+    const unload = (event: BeforeUnloadEvent) => {
+      if (dirtyRef.current) event.preventDefault();
+    };
+    const navigate = (event: MouseEvent) => {
+      if (!dirtyRef.current || !formRef.current?.isConnected) return;
+      const target =
+        event.target instanceof Element
+          ? event.target.closest("a[href], button, input[type=radio]")
+          : null;
+      if (!target || formRef.current?.contains(target)) return;
+      const card = formRef.current.closest(".review-card");
+      const discardsForm =
+        (target.matches("a[href]") &&
+          target.getAttribute("target") !== "_blank" &&
+          !target.hasAttribute("download")) ||
+        !!target.closest("nav, .review-toolbar") ||
+        target.hasAttribute("data-navigation") ||
+        (card &&
+          card === target.closest(".review-card") &&
+          target.matches("button, input[type=radio]"));
+      if (!discardsForm) return;
+      if (!window.confirm("Discard unsaved changes in this form?")) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      } else {
+        dirtyRef.current = false;
+        setDirty(false);
+      }
+    };
+    window.addEventListener("beforeunload", unload);
+    document.addEventListener("click", navigate, true);
+    return () => {
+      window.removeEventListener("beforeunload", unload);
+      document.removeEventListener("click", navigate, true);
+    };
+  }, [dirty]);
   async function handle(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -152,6 +200,8 @@ export function Form({
     setSaved(false);
     try {
       const result = await action(form);
+      dirtyRef.current = false;
+      setDirty(false);
       setSaved(true);
       onSuccess?.(result);
     } catch (error) {
@@ -161,7 +211,15 @@ export function Form({
     }
   }
   return (
-    <form onSubmit={handle}>
+    <form
+      ref={formRef}
+      onSubmit={handle}
+      onChange={() => {
+        dirtyRef.current = true;
+        setDirty(true);
+        setSaved(false);
+      }}
+    >
       {children}
       {error && <Notice error>{error}</Notice>}
       <div className="form-actions">

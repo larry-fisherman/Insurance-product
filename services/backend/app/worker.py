@@ -13,12 +13,15 @@ from app.config import Settings
 from app.database.models import AppUser, Membership, OutboxEvent, Tenant
 from app.database.runtime import Database
 from app.documents import (
+    MAX_PAGES,
     PARSER_VERSION,
+    Block,
     DocumentError,
     classify,
     local_extract,
     parse_pdf,
     parse_xlsx,
+    processing_inventory,
     provider_extract,
     scan,
     validate_file,
@@ -106,6 +109,10 @@ def dispatch() -> None:
                             sa.and_(
                                 ProcessingJob.status == "queued",
                                 ProcessingJob.created_at < now() - timedelta(seconds=30),
+                                sa.or_(
+                                    ProcessingJob.lease_until.is_(None),
+                                    ProcessingJob.lease_until <= now(),
+                                ),
                             ),
                             sa.and_(
                                 ProcessingJob.status == "running", ProcessingJob.lease_until < now()
@@ -148,6 +155,8 @@ def process_job(configuration: Settings, tenant_id: UUID, user_id: UUID, job_id:
                 return
             if job.status == "running" and job.lease_until and job.lease_until > now():
                 return
+            if job.status == "queued" and job.lease_until and job.lease_until > now():
+                return
             job.status, job.stage = "running", "processing"
             job.attempts += 1
             claimed_attempt = job.attempts
@@ -173,22 +182,61 @@ def process_job(configuration: Settings, tenant_id: UUID, user_id: UUID, job_id:
                 raise DocumentError("INTEGRITY_FAILURE")
             media_type = validate_file(filename, data)
             scanner = scan(data, signature, configuration)
-            blocks, page_count = (
-                parse_pdf(data) if media_type == "application/pdf" else parse_xlsx(data)
-            )
+            # Persist parsed evidence before extraction/provider calls. Retries reuse this
+            # checkpoint and its immutable source IDs instead of duplicating evidence.
+            with db.tenant(tenant_id, user_id) as session:
+                existing = list(
+                    session.scalars(
+                        sa.select(SourceBlock)
+                        .where(SourceBlock.document_id == document_id)
+                        .order_by(SourceBlock.created_at, SourceBlock.id)
+                    )
+                )
+                document = get(session, DocumentVersion, document_id)
+                checkpoint = document.processing_inventory.get("parse_complete", False)
+                page_count = document.page_count
+            if checkpoint:
+                blocks = [Block(row.text, row.locator, row.id) for row in existing]
+                order = {
+                    ref: i
+                    for i, ref in enumerate(document.processing_inventory.get("source_order", []))
+                }
+                blocks.sort(key=lambda b: order.get(str(b.id), len(order)))
+            else:
+                blocks, page_count = (
+                    parse_pdf(data) if media_type == "application/pdf" else parse_xlsx(data)
+                )
             document_type = classify(blocks)
-            extracted = (
-                provider_extract(blocks, configuration)
-                if configuration.extraction_provider != "local"
-                else local_extract(blocks, document_type)
-            )
+            local_candidates = local_extract(blocks, document_type)
+            segment_types = {
+                segment["type"]
+                for segment in processing_inventory(blocks, local_candidates)["segments"]
+                if segment["type"] != "unknown"
+            }
+            if len(segment_types) > 1:
+                document_type = "mixed"
             with db.tenant(tenant_id, user_id) as session:
                 submission = get(session, Submission, submission_id, lock=True)
                 job = get(session, ProcessingJob, job_id, lock=True)
                 if job.status != "running" or job.attempts != claimed_attempt:
                     return
                 document = get(session, DocumentVersion, document_id)
-                if document.processing_status != "completed":
+                other_pages = (
+                    session.scalar(
+                        sa.select(
+                            sa.func.coalesce(sa.func.sum(DocumentVersion.page_count), 0)
+                        ).where(
+                            DocumentVersion.submission_id == submission_id,
+                            DocumentVersion.id != document_id,
+                            DocumentVersion.media_type == "application/pdf",
+                            DocumentVersion.excluded_reason.is_(None),
+                        )
+                    )
+                    or 0
+                )
+                if media_type == "application/pdf" and other_pages + page_count > MAX_PAGES:
+                    raise DocumentError("SUBMISSION_PAGE_LIMIT")
+                if not checkpoint:
                     for block in blocks:
                         session.add(
                             SourceBlock(
@@ -200,7 +248,75 @@ def process_job(configuration: Settings, tenant_id: UUID, user_id: UUID, job_id:
                                 parser_version=PARSER_VERSION,
                             )
                         )
-                    session.flush()
+                    document.processing_inventory = {
+                        **processing_inventory(blocks, local_candidates),
+                        "parse_complete": True,
+                        "source_order": [str(b.id) for b in blocks],
+                    }
+                document.scan_status = "clean"
+                document.document_type, document.page_count = document_type, page_count
+                job.stage, job.heartbeat_at = "extract", now()
+                run_metadata = {
+                    "job_id": str(job.id),
+                    "attempt": claimed_attempt,
+                    "provider": configuration.extraction_provider,
+                    "model": configuration.extraction_model or None,
+                    "prompt_version": "cgl-evidence-2",
+                    "pipeline_version": PIPELINE_VERSION,
+                    "parser_version": PARSER_VERSION,
+                    "input_sha256": sha,
+                    "input_characters": sum(len(b.text) for b in blocks),
+                    "input_tokens": None,
+                    "output_tokens": None,
+                    "cost_status": "unpriced"
+                    if configuration.extraction_provider != "local"
+                    else "no_external_provider",
+                }
+                session.add(
+                    UsageEvent(
+                        tenant_id=tenant_id,
+                        submission_id=submission_id,
+                        kind="extraction_attempt",
+                        quantity=1,
+                        estimated_cost=None,
+                        metadata_json={**run_metadata, "status": "started"},
+                    )
+                )
+                document.processing_inventory = {
+                    **document.processing_inventory,
+                    "extraction_run": run_metadata,
+                }
+                submission.row_version += 1
+            extracted = (
+                provider_extract(blocks, configuration)
+                if configuration.extraction_provider != "local"
+                else local_candidates
+            )
+            if configuration.extraction_provider != "local":
+                # Provider omissions must not discard recognized local fields or abstentions.
+                identities = {
+                    canonical_json([f.field, f.value, f.context, f.availability, f.support_status])
+                    for f in extracted
+                }
+                extracted += [
+                    f
+                    for f in local_candidates
+                    if canonical_json(
+                        [f.field, f.value, f.context, f.availability, f.support_status]
+                    )
+                    not in identities
+                ]
+            with db.tenant(tenant_id, user_id) as session:
+                submission = get(session, Submission, submission_id, lock=True)
+                job = get(session, ProcessingJob, job_id, lock=True)
+                if job.status != "running" or job.attempts != claimed_attempt:
+                    return
+                document = get(session, DocumentVersion, document_id)
+                if document.processing_status != "completed":
+                    document.processing_inventory = {
+                        **document.processing_inventory,
+                        **processing_inventory(blocks, extracted),
+                    }
                     for fact in extracted:
                         session.add(
                             Observation(
@@ -217,6 +333,8 @@ def process_job(configuration: Settings, tenant_id: UUID, user_id: UUID, job_id:
                                 method=fact.method,
                                 pipeline_version=PIPELINE_VERSION,
                                 warnings=fact.warnings,
+                                availability=fact.availability,
+                                support_status=fact.support_status,
                             )
                         )
                     document.scan_status, document.processing_status = "clean", "completed"
@@ -230,6 +348,8 @@ def process_job(configuration: Settings, tenant_id: UUID, user_id: UUID, job_id:
                             quantity=page_count,
                             estimated_cost=None,
                             metadata_json={
+                                **run_metadata,
+                                "status": "succeeded",
                                 "scanner": scanner,
                                 "method": "provider"
                                 if configuration.extraction_provider != "local"
@@ -261,7 +381,7 @@ def process_job(configuration: Settings, tenant_id: UUID, user_id: UUID, job_id:
                     actual, key=lambda d: d["id"]
                 ):
                     raise DocumentError("PACKAGE_INPUT_CHANGED")
-                documents = [
+                documents = snapshot.get("document_inventory") or [
                     {"id": str(d.id), "filename": d.filename, "sha256": d.sha256} for d in docs
                 ]
                 supporting = []
@@ -270,7 +390,11 @@ def process_job(configuration: Settings, tenant_id: UUID, user_id: UUID, job_id:
                     if digest(data) != doc.sha256:
                         raise DocumentError("INTEGRITY_FAILURE")
                     supporting.append(("supporting/" + str(doc.id) + "_" + doc.filename, data))
-                source_ids = {UUID(ref) for fact in snapshot["facts"] for ref in fact["source_ids"]}
+                source_ids = {
+                    UUID(ref)
+                    for fact in snapshot["facts"]
+                    for ref in [*fact["source_ids"], *fact.get("original_source_ids", [])]
+                }
                 evidence = [
                     {
                         "id": str(source.id),
@@ -340,16 +464,45 @@ def process_job(configuration: Settings, tenant_id: UUID, user_id: UUID, job_id:
         retryable = isinstance(error, DocumentError) and error.retryable
         if claimed_attempt:
             with db.tenant(tenant_id, user_id) as session:
+                submission = get(session, Submission, submission_id, lock=True)
                 job = get(session, ProcessingJob, job_id, lock=True)
                 if job.attempts == claimed_attempt and job.status == "running":
                     job.error_code = code
                     job.status = "queued" if retryable and claimed_attempt < 3 else "failed"
-                    job.lease_until, job.finished_at = None, now()
+                    job.lease_until = (
+                        now() + timedelta(seconds=30 * 2 ** (claimed_attempt - 1))
+                        if job.status == "queued"
+                        else None
+                    )
+                    job.finished_at = now() if job.status == "failed" else None
+                    session.add(
+                        UsageEvent(
+                            tenant_id=tenant_id,
+                            submission_id=job.submission_id,
+                            kind="processing_attempt_failed",
+                            quantity=1,
+                            estimated_cost=None,
+                            metadata_json={
+                                "job_id": str(job.id),
+                                "attempt": claimed_attempt,
+                                "stage": job.stage,
+                                "provider": configuration.extraction_provider,
+                                "model": configuration.extraction_model or None,
+                                "pipeline_version": PIPELINE_VERSION,
+                                "prompt_version": "cgl-evidence-2",
+                                "error_code": code,
+                                "input_tokens": None,
+                                "output_tokens": None,
+                                "cost_status": "unknown",
+                            },
+                        )
+                    )
                     if job.document_id:
                         document = get(session, DocumentVersion, job.document_id)
                         document.processing_status = (
                             "queued" if job.status == "queued" else "failed"
                         )
+                        submission.row_version += 1
                         if code == "MALWARE_DETECTED":
                             document.scan_status = "rejected"
                     if job.package_id:

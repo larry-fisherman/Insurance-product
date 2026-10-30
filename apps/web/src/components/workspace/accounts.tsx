@@ -71,11 +71,18 @@ export function SubmissionTable({ items }: { items: Submission[] }) {
   );
 }
 export function Dashboard({ me }: { me: Me }) {
+  const [mine, setMine] = useState(false);
   const { data, error, refresh } = useResource<{
     agency: { name: string };
     metrics: Record<string, number>;
     submissions: Submission[];
-  }>("/dashboard", true);
+    blocking_queue: {
+      key: string;
+      message: string;
+      submission_id: string;
+      title: string;
+    }[];
+  }>("/dashboard" + (mine ? "?owner_membership_id=" + me.membership_id : ""), true);
   if (!data) return <Loading error={error} retry={refresh} />;
   return (
     <>
@@ -90,6 +97,14 @@ export function Dashboard({ me }: { me: Me }) {
           </Link>
         )}
       </Heading>
+      <label>
+        <input
+          type="checkbox"
+          checked={mine}
+          onChange={(event) => setMine(event.target.checked)}
+        />{" "}
+        Show my assigned submissions
+      </label>
       <div className="metrics">
         {[
           ["active_submissions", "Active submissions"],
@@ -102,12 +117,27 @@ export function Dashboard({ me }: { me: Me }) {
             <strong>{data.metrics[key]}</strong>
             <small>
               {key === "open_discrepancies"
-                ? "Cross-document conflicts"
+                ? "Current readiness blockers"
                 : "Current workspace records"}
             </small>
           </div>
         ))}
       </div>
+      {!!data.blocking_queue.length && (
+        <section className="panel padded">
+          <h2>Work requiring attention</h2>
+          <ul>
+            {data.blocking_queue.map((item) => (
+              <li key={item.submission_id + item.key}>
+                <Link href={"/workspace/submissions/" + item.submission_id}>
+                  {item.title}
+                </Link>
+                : {item.message}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       <section className="panel">
         <div className="panel-heading">
           <div>

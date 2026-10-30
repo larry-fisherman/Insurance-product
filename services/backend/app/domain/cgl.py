@@ -10,8 +10,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.common import canonical_json, digest
 
-PIPELINE_VERSION = "cgl-extraction-1"
-RULE_VERSION = "cgl-rules-1"
+PIPELINE_VERSION = "cgl-extraction-2"
+RULE_VERSION = "cgl-rules-2"
+REQUIREMENT_PROFILE = "cgl-synthetic-2"
 
 
 class Context(BaseModel):
@@ -41,6 +42,8 @@ class Context(BaseModel):
     as_of: date | None = None
     policy_reference: str | None = Field(default=None, max_length=300)
     classification_system: str | None = Field(default=None, max_length=200)
+    entity_id: str | None = Field(default=None, max_length=200)
+    location_id: str | None = Field(default=None, max_length=200)
 
     @model_validator(mode="after")
     def dates(self) -> "Context":
@@ -96,6 +99,8 @@ FIELD_LABELS = {
     "policy.carrier": "Insurer",
     "policy.effective": "Policy effective date",
     "policy.expiration": "Policy expiration date",
+    "policy.referenced_endorsement": "Referenced endorsement",
+    "policy.endorsement_form": "Supplied endorsement wording",
     "loss.claim": "Claim valuation",
     "loss.period": "Loss report period",
     "loss.no_losses": "Explicit no-loss statement",
@@ -130,6 +135,15 @@ def validate_fact(field: str, value: Any, context: dict[str, Any]) -> tuple[Any,
             and not parsed.currency
         ):
             raise ValueError("Monetary exposures require a currency")
+        if parsed.basis in {
+            "sales",
+            "receipts",
+            "payroll",
+            "subcontract_cost",
+        } and parsed.unit not in {"money", parsed.currency}:
+            raise ValueError("Monetary exposure unit must match its currency or be 'money'")
+        if parsed.basis in {"sales", "receipts", "payroll", "subcontract_cost"}:
+            parsed.unit = "money"
     elif field.startswith("coverage.") and field not in {
         "coverage.trigger",
         "coverage.endorsement",
@@ -162,15 +176,27 @@ def validate_fact(field: str, value: Any, context: dict[str, Any]) -> tuple[Any,
 
 def group_key(field: str, context: dict[str, Any], value: Any = None) -> str:
     selected = dict(context)
+    if (
+        field == "exposure.amount"
+        and context.get("basis") in {"sales", "receipts", "payroll", "subcontract_cost"}
+        and context.get("unit") in {"money", context.get("currency")}
+    ):
+        selected["unit"] = "money"
+    if field.startswith("insured."):
+        selected = {"scope": context.get("scope", "all operations")}
+        if context.get("entity_id"):
+            selected["entity_id"] = context["entity_id"]
     if field in {
         "coverage.endorsement",
         "coverage.additional_insured",
         "insured.dba",
         "operations.class_code",
-    }:
+        "policy.referenced_endorsement",
+        "policy.endorsement_form",
+    } and not (field == "insured.dba" and context.get("entity_id")):
         selected["item"] = value
-    if field.startswith("insured."):
-        selected = {"scope": context.get("scope", "all operations")}
+    if field == "location.address":
+        selected = {"location_id": context.get("location_id") or digest(canonical_json(value))[:20]}
     if field == "loss.claim" and isinstance(value, dict):
         selected["claim_identity"] = [
             value.get("carrier"),
@@ -185,7 +211,17 @@ def fingerprint(observations: list[dict[str, Any]]) -> str:
     return digest(
         canonical_json(
             sorted(
-                [(str(o["id"]), o["value"], o["context"]) for o in observations], key=lambda x: x[0]
+                [
+                    (
+                        str(o["id"]),
+                        o["value"],
+                        o["context"],
+                        o.get("availability", "available"),
+                        o.get("support_status", "supported"),
+                    )
+                    for o in observations
+                ],
+                key=lambda x: x[0],
             )
         )
     )

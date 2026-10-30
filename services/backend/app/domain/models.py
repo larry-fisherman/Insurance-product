@@ -100,6 +100,9 @@ class Submission(Base, TenantRecord):
     requirements: Mapped[dict[str, Any]] = mapped_column(
         JSONB, server_default=sa.text("'{}'::jsonb")
     )
+    renewal_candidates: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, server_default=sa.text("'[]'::jsonb")
+    )
 
 
 class DocumentVersion(Base, TenantRecord):
@@ -123,6 +126,11 @@ class DocumentVersion(Base, TenantRecord):
     document_type: Mapped[str] = mapped_column(sa.Text, server_default="unknown")
     page_count: Mapped[int] = mapped_column(server_default=sa.text("0"))
     excluded_reason: Mapped[str | None] = mapped_column(sa.Text)
+    excluded_by: Mapped[UUID | None] = mapped_column(sa.ForeignKey("app.app_user.id"))
+    excluded_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    processing_inventory: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, server_default=sa.text("'{}'::jsonb")
+    )
     uploaded_by: Mapped[UUID] = mapped_column(sa.ForeignKey("app.app_user.id"))
 
 
@@ -160,6 +168,8 @@ class Observation(Base, TenantRecord):
     method: Mapped[str] = mapped_column(sa.Text)
     pipeline_version: Mapped[str] = mapped_column(sa.Text)
     warnings: Mapped[list[str]] = mapped_column(JSONB, server_default=sa.text("'[]'::jsonb"))
+    availability: Mapped[str] = mapped_column(sa.Text, server_default="available")
+    support_status: Mapped[str] = mapped_column(sa.Text, server_default="supported")
 
 
 class ProcessingJob(Base, TenantRecord):
@@ -219,6 +229,7 @@ class ReviewDecision(Base, TenantRecord):
     observation_id: Mapped[UUID | None]
     reason: Mapped[str] = mapped_column(sa.Text)
     reviewer_id: Mapped[UUID] = mapped_column(sa.ForeignKey("app.app_user.id"))
+    support: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=sa.text("'{}'::jsonb"))
 
 
 class CanonicalRevision(Base, TenantRecord):
@@ -247,7 +258,7 @@ class Package(Base, TenantRecord):
     status: Mapped[str] = mapped_column(sa.Text, server_default="queued")
     manifest: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=sa.text("'{}'::jsonb"))
     manifest_hash: Mapped[str | None] = mapped_column(sa.String(64))
-    template_version: Mapped[str] = mapped_column(sa.Text, server_default="original-cgl-1")
+    template_version: Mapped[str] = mapped_column(sa.Text, server_default="original-cgl-2")
 
 
 class PackageArtifact(Base, TenantRecord):
@@ -291,6 +302,8 @@ class WorkItem(Base, TenantRecord):
     status: Mapped[str] = mapped_column(sa.Text, server_default="open")
     due_date: Mapped[date | None]
     owner_id: Mapped[UUID | None] = mapped_column(sa.ForeignKey("app.app_user.id"))
+    row_version: Mapped[int] = mapped_column(server_default=sa.text("1"))
+    resolution_reason: Mapped[str | None] = mapped_column(sa.Text)
 
 
 class UsageEvent(Base, TenantRecord):

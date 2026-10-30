@@ -12,7 +12,24 @@ from fastapi import APIRouter, File, Form, Header, Query, Request, Response, Upl
 from pydantic import Field, model_validator
 
 from app.common import audit, canonical_json, digest, fail, now, record
-from app.database.models import AuditEvent, Invitation, Membership, MembershipRole, Role, Tenant
+from app.contracts import (
+    DocumentResponse,
+    InsuredResponse,
+    JobResponse,
+    PackageResponse,
+    SubmissionResponse,
+    TaskResponse,
+    WorkspaceResponse,
+)
+from app.database.models import (
+    AppUser,
+    AuditEvent,
+    Invitation,
+    Membership,
+    MembershipRole,
+    Role,
+    Tenant,
+)
 from app.documents import MAX_FILE, DocumentError, fixture_signature, validate_file
 from app.domain.cgl import FIELD_LABELS
 from app.domain.models import (
@@ -31,13 +48,16 @@ from app.domain.models import (
     WorkItem,
 )
 from app.identity import Authenticated, Input, Scoped, database
+from app.rendering import TEMPLATE_VERSION
 from app.storage import storage
 from app.workflow import (
     active_documents,
     enqueue,
+    ensure_open,
     get,
     idempotent,
     readiness,
+    refresh_issues,
     review,
     save_revision,
     verify_approval_authority,
@@ -102,6 +122,9 @@ class DecisionInput(Input):
     value: Any = None
     context: dict[str, Any] = Field(default_factory=dict)
     reason: str = Field(min_length=3, max_length=2000)
+    support_type: Literal["document", "broker_attestation"] | None = None
+    support_source_ids: list[UUID] = Field(default_factory=list, max_length=20)
+    attestation_origin: str = Field(default="", max_length=2000)
 
 
 class ReviewInput(Input):
@@ -117,6 +140,12 @@ class ExceptionInput(ReasonInput):
     key: str = Field(max_length=200)
     fingerprint: str
     expected_version: int
+
+
+class ClassificationInput(ReasonInput):
+    document_type: Literal[
+        "application", "policy", "loss_runs", "exposure_schedule", "endorsement", "mixed", "unknown"
+    ]
 
 
 class VersionInput(Input):
@@ -149,10 +178,20 @@ class TaskInput(Input):
     title: str = Field(min_length=3, max_length=200)
     description: str = Field(default="", max_length=4000)
     due_date: date | None = None
+    owner_membership_id: UUID | None = None
 
 
 class TaskEdit(Input):
-    status: Literal["open", "completed"]
+    expected_version: int = Field(ge=1)
+    status: Literal["open", "completed"] | None = None
+    due_date: date | None = None
+    owner_membership_id: UUID | None = None
+    resolution_reason: str = Field(default="", max_length=2000)
+
+
+class TransitionInput(ReasonInput):
+    expected_version: int = Field(ge=1)
+    status: Literal["draft", "collecting", "in_review", "ready_for_package", "closed", "cancelled"]
 
 
 def document_record(doc: DocumentVersion) -> dict[str, Any]:
@@ -160,36 +199,42 @@ def document_record(doc: DocumentVersion) -> dict[str, Any]:
 
 
 @router.get("/dashboard")
-def dashboard(scope: Scoped) -> dict[str, Any]:
+def dashboard(scope: Scoped, owner_membership_id: UUID | None = None) -> dict[str, Any]:
     scope.require("agency.read")
     tenant = get(scope.session, Tenant, scope.tenant_id)
     can_view = "submissions.read" in scope.actor.permissions
-    submissions = (
-        list(
-            scope.session.scalars(
-                sa.select(Submission).order_by(Submission.due_date.asc().nulls_last()).limit(100)
-            )
-        )
-        if can_view
-        else []
-    )
+    query = sa.select(Submission).order_by(Submission.due_date.asc().nulls_last(), Submission.id)
+    if owner_membership_id:
+        get(scope.session, Membership, owner_membership_id)
+        query = query.where(Submission.assigned_membership_id == owner_membership_id)
+    submissions = list(scope.session.scalars(query)) if can_view else []
     insureds = (
         {row.id: row.name for row in scope.session.scalars(sa.select(InsuredAccount))}
         if can_view
         else {}
     )
-    issues = (
-        scope.session.scalar(
-            sa.select(sa.func.count()).select_from(Discrepancy).where(Discrepancy.status == "open")
+    queue: list[dict[str, Any]] = []
+    issue_count = 0
+    for submission in submissions:
+        if submission.status in {"closed", "cancelled"}:
+            continue
+        blockers = readiness(scope.session, submission)["blockers"]
+        issue_count += len(blockers)
+        queue.extend(
+            {
+                **item,
+                "submission_id": str(submission.id),
+                "title": submission.title,
+                "owner_membership_id": str(submission.assigned_membership_id),
+            }
+            for item in blockers[: max(0, 100 - len(queue))]
         )
-        if can_view
-        else 0
-    )
-    jobs = (
+    ids = [s.id for s in submissions]
+    failures = (
         scope.session.scalar(
             sa.select(sa.func.count())
             .select_from(ProcessingJob)
-            .where(ProcessingJob.status == "failed")
+            .where(ProcessingJob.status == "failed", ProcessingJob.submission_id.in_(ids))
         )
         if can_view
         else 0
@@ -198,13 +243,15 @@ def dashboard(scope: Scoped) -> dict[str, Any]:
         "agency": record(tenant),
         "submissions": [
             {**record(s), "insured_name": insureds.get(s.insured_id, "Insured")}
-            for s in submissions
+            for s in submissions[:100]
         ],
+        "submission_count": len(submissions),
+        "blocking_queue": queue,
         "metrics": {
             "active_submissions": sum(s.status not in {"closed", "cancelled"} for s in submissions),
             "approved_packages": sum(s.status in {"approved", "exported"} for s in submissions),
-            "open_discrepancies": issues,
-            "processing_failures": jobs,
+            "open_discrepancies": issue_count,
+            "processing_failures": failures,
         },
         "synthetic_only": True,
     }
@@ -234,7 +281,7 @@ def list_insureds(
     }
 
 
-@router.post("/insureds", status_code=201)
+@router.post("/insureds", status_code=201, response_model=InsuredResponse)
 def create_insured(
     payload: InsuredInput, scope: Scoped, idempotency_key: str | None = Header(default=None)
 ) -> dict[str, Any]:
@@ -263,7 +310,7 @@ def insured_detail(insured_id: UUID, scope: Scoped) -> dict[str, Any]:
     return {"insured": record(row), "submissions": [record(s) for s in submissions]}
 
 
-@router.patch("/insureds/{insured_id}")
+@router.patch("/insureds/{insured_id}", response_model=InsuredResponse)
 def edit_insured(insured_id: UUID, payload: InsuredEdit, scope: Scoped) -> dict[str, Any]:
     scope.require("insureds.write")
     row = get(scope.session, InsuredAccount, insured_id, lock=True)
@@ -283,7 +330,10 @@ def edit_insured(insured_id: UUID, payload: InsuredEdit, scope: Scoped) -> dict[
             .values(
                 input_version=Submission.input_version + 1,
                 row_version=Submission.row_version + 1,
-                status="in_review",
+                status=sa.case(
+                    (Submission.status.in_(["closed", "cancelled"]), Submission.status),
+                    else_="in_review",
+                ),
             )
         )
     row.row_version += 1
@@ -307,7 +357,7 @@ def list_submissions(
     }
 
 
-@router.post("/submissions", status_code=201)
+@router.post("/submissions", status_code=201, response_model=SubmissionResponse)
 def create_submission(
     payload: SubmissionInput, scope: Scoped, idempotency_key: str | None = Header(default=None)
 ) -> dict[str, Any]:
@@ -329,6 +379,28 @@ def create_submission(
         prior = get(scope.session, Submission, payload.prior_submission_id)
         if prior.insured_id != insured.id or payload.kind != "renewal":
             fail(422, "INVALID_RENEWAL", "Renewals must reference the same insured.")
+        revision = scope.session.scalar(
+            sa.select(CanonicalRevision)
+            .where(CanonicalRevision.submission_id == prior.id)
+            .order_by(CanonicalRevision.number.desc())
+            .limit(1)
+        )
+        if revision:
+            if digest(canonical_json(revision.snapshot)) != revision.sha256:
+                fail(409, "INTEGRITY_FAILURE", "Prior revision integrity verification failed.")
+            values["renewal_candidates"] = [
+                {
+                    "key": "renewal:" + str(index),
+                    "field": fact["field"],
+                    "value": fact["value"],
+                    "context": fact["context"],
+                    "prior_revision_id": str(revision.id),
+                    "prior_revision_hash": revision.sha256,
+                    "prior_fact": fact,
+                    "confirmed_for_current_period": False,
+                }
+                for index, fact in enumerate(revision.snapshot["facts"])
+            ]
     row = Submission(
         id=object_id, tenant_id=scope.tenant_id, requirements={"loss_freshness_days": 60}, **values
     )
@@ -346,10 +418,11 @@ def create_submission(
     return record(row)
 
 
-@router.patch("/submissions/{submission_id}")
+@router.patch("/submissions/{submission_id}", response_model=SubmissionResponse)
 def edit_submission(submission_id: UUID, payload: SubmissionEdit, scope: Scoped) -> dict[str, Any]:
     scope.require("submissions.write")
     row = get(scope.session, Submission, submission_id, lock=True)
+    ensure_open(row)
     version_check(row, payload.expected_version)
     if (
         payload.insured_id != row.insured_id
@@ -382,7 +455,60 @@ def edit_submission(submission_id: UUID, payload: SubmissionEdit, scope: Scoped)
     return record(row)
 
 
-@router.get("/submissions/{submission_id}")
+@router.post("/submissions/{submission_id}/status", response_model=SubmissionResponse)
+def transition_submission(
+    submission_id: UUID, payload: TransitionInput, scope: Scoped
+) -> dict[str, Any]:
+    scope.require("submissions.write")
+    row = get(scope.session, Submission, submission_id, lock=True)
+    version_check(row, payload.expected_version)
+    ensure_open(row)
+    transitions = {
+        "draft": {"collecting", "cancelled"},
+        "collecting": {"draft", "in_review", "cancelled"},
+        "in_review": {"collecting", "ready_for_package", "cancelled"},
+        "ready_for_package": {"in_review", "collecting", "cancelled"},
+        "awaiting_approval": {"in_review", "cancelled"},
+        "approved": {"in_review", "closed", "cancelled"},
+        "exported": {"in_review", "closed", "cancelled"},
+    }
+    if payload.status not in transitions.get(row.status, set()):
+        fail(409, "INVALID_TRANSITION", "This status transition is not permitted.")
+    if payload.status == "draft" and scope.session.scalar(
+        sa.select(DocumentVersion.id).where(DocumentVersion.submission_id == row.id).limit(1)
+    ):
+        fail(409, "DOCUMENTS_EXIST", "A submission with documents cannot return to draft.")
+    if payload.status == "ready_for_package" and not readiness(scope.session, row)["ready"]:
+        fail(
+            409, "REVIEW_INCOMPLETE", "Resolve readiness blockers before marking ready for package."
+        )
+    if payload.status in {"closed", "cancelled"} and scope.session.scalar(
+        sa.select(ProcessingJob.id)
+        .where(
+            ProcessingJob.submission_id == row.id, ProcessingJob.status.in_(["running", "queued"])
+        )
+        .limit(1)
+    ):
+        fail(
+            409,
+            "PROCESSING_ACTIVE",
+            "Finish processing before closing or cancelling this submission.",
+        )
+    previous = row.status
+    row.status, row.row_version = payload.status, row.row_version + 1
+    audit(
+        scope.session,
+        scope.tenant_id,
+        scope.membership_id,
+        "submission.transitioned",
+        "submission",
+        row.id,
+        {"from": previous, "to": row.status, "reason": payload.reason},
+    )
+    return record(row)
+
+
+@router.get("/submissions/{submission_id}", response_model=WorkspaceResponse)
 def workspace(submission_id: UUID, scope: Scoped) -> dict[str, Any]:
     scope.require("submissions.read")
     submission = get(scope.session, Submission, submission_id)
@@ -417,7 +543,12 @@ def workspace(submission_id: UUID, scope: Scoped) -> dict[str, Any]:
         for ref in [observation["source_id"], *observation["supporting_source_ids"]]
     }
     sources = scope.session.scalars(
-        sa.select(SourceBlock).where(SourceBlock.id.in_(cited_ids))
+        sa.select(SourceBlock)
+        .join(DocumentVersion, DocumentVersion.id == SourceBlock.document_id)
+        .where(
+            DocumentVersion.submission_id == submission_id,
+            sa.or_(SourceBlock.id.in_(cited_ids), DocumentVersion.processing_status == "failed"),
+        )
     ).all()
     return {
         "submission": record(submission),
@@ -444,6 +575,14 @@ def workspace(submission_id: UUID, scope: Scoped) -> dict[str, Any]:
         ],
         "issues": [record(issue) for issue in issues],
         "tasks": [record(task) for task in tasks],
+        "members": [
+            {"id": str(member.id), "user_id": str(member.user_id), "display_name": name}
+            for member, name in scope.session.execute(
+                sa.select(Membership, AppUser.display_name)
+                .join(AppUser, AppUser.id == Membership.user_id)
+                .where(Membership.status == "active")
+            )
+        ],
         "field_labels": FIELD_LABELS,
     }
 
@@ -457,6 +596,7 @@ def store_document(
     supersedes_id: UUID | None = None,
     trusted_fixture: bool = False,
 ) -> DocumentVersion:
+    ensure_open(submission)
     try:
         media_type = validate_file(filename, data)
     except DocumentError as error:
@@ -474,6 +614,7 @@ def store_document(
         if previous.submission_id != submission.id:
             fail(422, "INVALID_DOCUMENT_VERSION", "Replace a document from this submission.")
         previous.excluded_reason = "Superseded by a newer document version"
+        previous.excluded_by, previous.excluded_at = scope.actor.user_id, now()
     key = f"tenants/{scope.tenant_id}/documents/{object_id}/original"
     version = storage(scope.configuration).put(key, data, media_type)
     row = DocumentVersion(
@@ -496,6 +637,7 @@ def store_document(
     submission.row_version += 1
     submission.status = "collecting"
     enqueue(scope, submission.id, document_id=row.id)
+    refresh_issues(scope.session, submission)
     audit(
         scope.session,
         scope.tenant_id,
@@ -508,7 +650,9 @@ def store_document(
     return row
 
 
-@router.post("/submissions/{submission_id}/documents", status_code=202)
+@router.post(
+    "/submissions/{submission_id}/documents", status_code=202, response_model=DocumentResponse
+)
 def upload(
     submission_id: UUID,
     scope: Scoped,
@@ -542,18 +686,28 @@ def exclude_document(document_id: UUID, payload: ReasonInput, scope: Scoped) -> 
     scope.require("documents.write")
     doc = get(scope.session, DocumentVersion, document_id)
     submission = get(scope.session, Submission, doc.submission_id, lock=True)
+    ensure_open(submission)
     doc.excluded_reason = payload.reason
+    doc.excluded_by, doc.excluded_at = scope.actor.user_id, now()
     submission.input_version += 1
     submission.row_version += 1
     submission.status = "in_review"
+    scope.session.flush()
+    refresh_issues(scope.session, submission)
     audit(
-        scope.session, scope.tenant_id, scope.membership_id, "document.excluded", "document", doc.id
+        scope.session,
+        scope.tenant_id,
+        scope.membership_id,
+        "document.excluded",
+        "document",
+        doc.id,
+        {"reason": payload.reason},
     )
     return {"ok": True}
 
 
 @router.get("/documents/{document_id}/content")
-def document_content(document_id: UUID, scope: Scoped) -> Response:
+def document_content(document_id: UUID, scope: Scoped, inline: bool = False) -> Response:
     scope.require("documents.read")
     doc = get(scope.session, DocumentVersion, document_id)
     if doc.scan_status != "clean":
@@ -568,10 +722,49 @@ def document_content(document_id: UUID, scope: Scoped) -> Response:
         data,
         media_type=doc.media_type,
         headers={
-            "Content-Disposition": "attachment; filename*=UTF-8''" + quote(doc.filename),
+            "Content-Disposition": (
+                "inline" if inline and doc.media_type == "application/pdf" else "attachment"
+            )
+            + "; filename*=UTF-8''"
+            + quote(doc.filename),
             "Content-Security-Policy": "sandbox; default-src 'none'",
         },
     )
+
+
+@router.post("/documents/{document_id}/classification", response_model=DocumentResponse)
+def classify_document(
+    document_id: UUID, payload: ClassificationInput, scope: Scoped
+) -> dict[str, Any]:
+    scope.require("documents.write")
+    doc = get(scope.session, DocumentVersion, document_id)
+    submission = get(scope.session, Submission, doc.submission_id, lock=True)
+    ensure_open(submission)
+    if doc.processing_status != "completed":
+        fail(409, "DOCUMENT_NOT_READY", "Wait for processing before overriding classification.")
+    doc.document_type = payload.document_type
+    doc.processing_inventory = {
+        **doc.processing_inventory,
+        "classification_override": {
+            "type": payload.document_type,
+            "reason": payload.reason,
+            "actor": str(scope.actor.user_id),
+            "at": now().isoformat(),
+        },
+    }
+    submission.input_version += 1
+    submission.row_version += 1
+    submission.status = "in_review"
+    audit(
+        scope.session,
+        scope.tenant_id,
+        scope.membership_id,
+        "document.classification_changed",
+        "document",
+        doc.id,
+        payload.model_dump(),
+    )
+    return document_record(doc)
 
 
 @router.get("/sources/{source_id}")
@@ -582,11 +775,12 @@ def source(source_id: UUID, scope: Scoped) -> dict[str, Any]:
     return record(row)
 
 
-@router.post("/jobs/{job_id}/retry", status_code=202)
+@router.post("/jobs/{job_id}/retry", status_code=202, response_model=JobResponse)
 def retry_job(job_id: UUID, scope: Scoped) -> dict[str, Any]:
     scope.require("documents.write")
     candidate = get(scope.session, ProcessingJob, job_id)
     submission = get(scope.session, Submission, candidate.submission_id, lock=True)
+    ensure_open(submission)
     job = get(scope.session, ProcessingJob, job_id, lock=True)
     if job.document_id:
         doc = get(scope.session, DocumentVersion, job.document_id)
@@ -644,6 +838,7 @@ def review_decisions(submission_id: UUID, payload: ReviewInput, scope: Scoped) -
 def accept_exception(submission_id: UUID, payload: ExceptionInput, scope: Scoped) -> dict[str, Any]:
     scope.require("exceptions.accept")
     submission = get(scope.session, Submission, submission_id, lock=True)
+    ensure_open(submission)
     version_check(submission, payload.expected_version)
     verify_approval_authority(scope)
     state = readiness(scope.session, submission)
@@ -690,7 +885,9 @@ def accept_exception(submission_id: UUID, payload: ExceptionInput, scope: Scoped
     return {"revision": record(revision), "row_version": submission.row_version}
 
 
-@router.post("/submissions/{submission_id}/packages", status_code=202)
+@router.post(
+    "/submissions/{submission_id}/packages", status_code=202, response_model=PackageResponse
+)
 def generate_package(
     submission_id: UUID,
     payload: VersionInput,
@@ -699,6 +896,7 @@ def generate_package(
 ) -> dict[str, Any]:
     scope.require("packages.generate")
     submission = get(scope.session, Submission, submission_id, lock=True)
+    ensure_open(submission)
     object_id, exists = idempotent(
         scope,
         "package.generate",
@@ -719,6 +917,7 @@ def generate_package(
         for d in active_documents(scope.session, submission.id)
     ]
     package = Package(
+        template_version=TEMPLATE_VERSION,
         manifest={"requested_documents": document_manifest},
         id=object_id,
         tenant_id=scope.tenant_id,
@@ -767,6 +966,7 @@ def approve_package(package_id: UUID, payload: ApprovalInput, scope: Scoped) -> 
     scope.require("packages.approve")
     package = get(scope.session, Package, package_id)
     submission = get(scope.session, Submission, package.submission_id, lock=True)
+    ensure_open(submission)
     verify_approval_authority(scope)
     revision = get(scope.session, CanonicalRevision, package.revision_id)
     if (
@@ -877,7 +1077,7 @@ def artifact_content(
                 format=format,
             )
         )
-        if not stale:
+        if not stale and submission.status not in {"closed", "cancelled"}:
             submission.status = "exported"
     audit(
         scope.session,
@@ -903,15 +1103,18 @@ def artifact_content(
     )
 
 
-@router.post("/submissions/{submission_id}/tasks", status_code=201)
+@router.post("/submissions/{submission_id}/tasks", status_code=201, response_model=TaskResponse)
 def create_task(submission_id: UUID, payload: TaskInput, scope: Scoped) -> dict[str, Any]:
     scope.require("reviews.write")
-    get(scope.session, Submission, submission_id)
+    ensure_open(get(scope.session, Submission, submission_id, lock=True))
+    owner = get(scope.session, Membership, payload.owner_membership_id or scope.membership_id)
+    if owner.status != "active":
+        fail(422, "OWNER_INACTIVE", "Assign an active agency member.")
     row = WorkItem(
         tenant_id=scope.tenant_id,
         submission_id=submission_id,
-        owner_id=scope.actor.user_id,
-        **payload.model_dump(),
+        owner_id=owner.user_id,
+        **payload.model_dump(exclude={"owner_membership_id"}),
     )
     scope.session.add(row)
     scope.session.flush()
@@ -919,11 +1122,27 @@ def create_task(submission_id: UUID, payload: TaskInput, scope: Scoped) -> dict[
     return record(row)
 
 
-@router.patch("/tasks/{task_id}")
+@router.patch("/tasks/{task_id}", response_model=TaskResponse)
 def edit_task(task_id: UUID, payload: TaskEdit, scope: Scoped) -> dict[str, Any]:
     scope.require("reviews.write")
+    candidate = get(scope.session, WorkItem, task_id)
+    ensure_open(get(scope.session, Submission, candidate.submission_id, lock=True))
     row = get(scope.session, WorkItem, task_id, lock=True)
-    row.status = payload.status
+    if row.row_version != payload.expected_version:
+        fail(409, "STALE_TASK", "This task changed. Refresh before editing.")
+    if payload.status == "completed" and len(payload.resolution_reason.strip()) < 5:
+        fail(422, "RESOLUTION_REQUIRED", "Record how the task was resolved.")
+    if "owner_membership_id" in payload.model_fields_set:
+        owner = get(scope.session, Membership, payload.owner_membership_id or scope.membership_id)
+        if owner.status != "active":
+            fail(422, "OWNER_INACTIVE", "Assign an active agency member.")
+        row.owner_id = owner.user_id
+    if "due_date" in payload.model_fields_set:
+        row.due_date = payload.due_date
+    if payload.status:
+        row.status = payload.status
+        row.resolution_reason = payload.resolution_reason if payload.status == "completed" else None
+    row.row_version += 1
     audit(scope.session, scope.tenant_id, scope.membership_id, "task.updated", "task", row.id)
     return record(row)
 

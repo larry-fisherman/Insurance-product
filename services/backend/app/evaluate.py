@@ -20,7 +20,9 @@ def evaluate(count: int = 100) -> dict[str, object]:
         started = time.perf_counter()
         amount, alternate = str(100000 + index * 101), str(110000 + index * 101)
         basis = ["Annual gross sales", "Payroll", "Area square feet"][index % 3]
-        basis_key, unit = [("sales", "USD"), ("payroll", "USD"), ("area", "square feet")][index % 3]
+        basis_key, unit = [("sales", "money"), ("payroll", "money"), ("area", "square feet")][
+            index % 3
+        ]
         name = f"Fictional Regression Insured {index} LLC"
         lines = [
             "FICTIONAL CGL APPLICATION",

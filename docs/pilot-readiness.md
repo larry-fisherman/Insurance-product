@@ -1,6 +1,6 @@
 # Release gates and evidence
 
-The implemented milestone is a **complete local synthetic review MVP**, not a commercial launch. The application enforces local/test environments and synthetic mode. Do not remove that gate simply to deploy.
+The implemented milestone is a **local synthetic review build with outstanding functional and release requirements**. See [review remediation](review-remediation.md) for the defect fixes and the engineering work that remains open. The application enforces local/test environments and synthetic mode. Do not remove that gate simply to deploy.
 
 ## Before customer documents
 

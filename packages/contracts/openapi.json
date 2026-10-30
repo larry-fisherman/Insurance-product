@@ -24,6 +24,40 @@
         "title": "ApprovalInput",
         "type": "object"
       },
+      "BlockerResponse": {
+        "properties": {
+          "fingerprint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fingerprint"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "waivable": {
+            "title": "Waivable",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "key",
+          "message",
+          "waivable"
+        ],
+        "title": "BlockerResponse",
+        "type": "object"
+      },
       "Body_upload_api_v1_submissions__submission_id__documents_post": {
         "properties": {
           "file": {
@@ -48,6 +82,185 @@
           "file"
         ],
         "title": "Body_upload_api_v1_submissions__submission_id__documents_post",
+        "type": "object"
+      },
+      "CanonicalFactResponse": {
+        "properties": {
+          "attestation_origin": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attestation Origin"
+          },
+          "context": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Context",
+            "type": "object"
+          },
+          "decision_id": {
+            "format": "uuid",
+            "title": "Decision Id",
+            "type": "string"
+          },
+          "evidence_type": {
+            "title": "Evidence Type",
+            "type": "string"
+          },
+          "field": {
+            "title": "Field",
+            "type": "string"
+          },
+          "group_key": {
+            "title": "Group Key",
+            "type": "string"
+          },
+          "original_source_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Original Source Ids",
+            "type": "array"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "renewal_lineage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RenewalCandidateResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reviewer_id": {
+            "format": "uuid",
+            "title": "Reviewer Id",
+            "type": "string"
+          },
+          "source_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Source Ids",
+            "type": "array"
+          },
+          "value": {
+            "$ref": "#/components/schemas/JsonValue"
+          }
+        },
+        "required": [
+          "group_key",
+          "field",
+          "value",
+          "context",
+          "source_ids",
+          "original_source_ids",
+          "decision_id",
+          "reviewer_id",
+          "reason",
+          "evidence_type",
+          "attestation_origin"
+        ],
+        "title": "CanonicalFactResponse",
+        "type": "object"
+      },
+      "CellResponse": {
+        "properties": {
+          "cached_value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cached Value"
+          },
+          "coordinate": {
+            "title": "Coordinate",
+            "type": "string"
+          },
+          "data_type": {
+            "title": "Data Type",
+            "type": "string"
+          },
+          "formula": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Formula"
+          },
+          "hidden_column": {
+            "title": "Hidden Column",
+            "type": "boolean"
+          },
+          "number_format": {
+            "title": "Number Format",
+            "type": "string"
+          },
+          "raw_value": {
+            "title": "Raw Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "coordinate",
+          "raw_value",
+          "number_format",
+          "data_type",
+          "formula",
+          "cached_value",
+          "hidden_column"
+        ],
+        "title": "CellResponse",
+        "type": "object"
+      },
+      "ClassificationInput": {
+        "additionalProperties": false,
+        "properties": {
+          "document_type": {
+            "enum": [
+              "application",
+              "policy",
+              "loss_runs",
+              "exposure_schedule",
+              "endorsement",
+              "mixed",
+              "unknown"
+            ],
+            "title": "Document Type",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 5,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "document_type"
+        ],
+        "title": "ClassificationInput",
         "type": "object"
       },
       "CodeInput": {
@@ -77,6 +290,12 @@
               "reject"
             ],
             "title": "Action",
+            "type": "string"
+          },
+          "attestation_origin": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Attestation Origin",
             "type": "string"
           },
           "context": {
@@ -124,6 +343,30 @@
             "title": "Reason",
             "type": "string"
           },
+          "support_source_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Support Source Ids",
+            "type": "array"
+          },
+          "support_type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "document",
+                  "broker_attestation"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Support Type"
+          },
           "value": {
             "title": "Value"
           }
@@ -134,6 +377,223 @@
           "reason"
         ],
         "title": "DecisionInput",
+        "type": "object"
+      },
+      "DecisionResponse": {
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "context": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Context",
+            "type": "object"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "field": {
+            "title": "Field",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "observation_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observation Id"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "reviewer_id": {
+            "format": "uuid",
+            "title": "Reviewer Id",
+            "type": "string"
+          },
+          "support": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Support",
+            "type": "object"
+          },
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/JsonValue"
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "created_at",
+          "action",
+          "value",
+          "context",
+          "reason",
+          "observation_id",
+          "field",
+          "reviewer_id",
+          "support"
+        ],
+        "title": "DecisionResponse",
+        "type": "object"
+      },
+      "DocumentResponse": {
+        "properties": {
+          "byte_size": {
+            "title": "Byte Size",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "document_type": {
+            "title": "Document Type",
+            "type": "string"
+          },
+          "excluded_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Excluded At"
+          },
+          "excluded_by": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Excluded By"
+          },
+          "excluded_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Excluded Reason"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "media_type": {
+            "title": "Media Type",
+            "type": "string"
+          },
+          "page_count": {
+            "title": "Page Count",
+            "type": "integer"
+          },
+          "processing_inventory": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Processing Inventory",
+            "type": "object"
+          },
+          "processing_status": {
+            "title": "Processing Status",
+            "type": "string"
+          },
+          "scan_status": {
+            "title": "Scan Status",
+            "type": "string"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "submission_id": {
+            "format": "uuid",
+            "title": "Submission Id",
+            "type": "string"
+          },
+          "supersedes_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Id"
+          },
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "uploaded_by": {
+            "format": "uuid",
+            "title": "Uploaded By",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "created_at",
+          "submission_id",
+          "supersedes_id",
+          "filename",
+          "media_type",
+          "sha256",
+          "byte_size",
+          "scan_status",
+          "processing_status",
+          "document_type",
+          "page_count",
+          "excluded_reason",
+          "excluded_by",
+          "excluded_at",
+          "processing_inventory",
+          "uploaded_by"
+        ],
+        "title": "DocumentResponse",
         "type": "object"
       },
       "ExceptionInput": {
@@ -166,6 +626,139 @@
           "expected_version"
         ],
         "title": "ExceptionInput",
+        "type": "object"
+      },
+      "ExceptionResponse": {
+        "properties": {
+          "accepted_by": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted By"
+          },
+          "input_fingerprint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Fingerprint"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "key",
+          "message",
+          "reason"
+        ],
+        "title": "ExceptionResponse",
+        "type": "object"
+      },
+      "GroupResponse": {
+        "properties": {
+          "candidate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RenewalCandidateResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "conflicting": {
+            "title": "Conflicting",
+            "type": "boolean"
+          },
+          "context": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Context",
+            "type": "object"
+          },
+          "decision": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DecisionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "field": {
+            "title": "Field",
+            "type": "string"
+          },
+          "fingerprint": {
+            "title": "Fingerprint",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "observations": {
+            "items": {
+              "$ref": "#/components/schemas/ObservationResponse"
+            },
+            "title": "Observations",
+            "type": "array"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "verified": {
+            "title": "Verified",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "key",
+          "field",
+          "label",
+          "context",
+          "observations",
+          "fingerprint",
+          "conflicting",
+          "verified",
+          "state",
+          "decision"
+        ],
+        "title": "GroupResponse",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -348,6 +941,107 @@
         "title": "InsuredInput",
         "type": "object"
       },
+      "InsuredResponse": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "dba": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dba"
+          },
+          "entity_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entity Type"
+          },
+          "external_reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Reference"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "mailing_address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mailing Address"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "operations": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operations"
+          },
+          "row_version": {
+            "title": "Row Version",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "created_at",
+          "name",
+          "dba",
+          "entity_type",
+          "mailing_address",
+          "operations",
+          "external_reference",
+          "status",
+          "row_version"
+        ],
+        "title": "InsuredResponse",
+        "type": "object"
+      },
       "InvitationAcceptance": {
         "additionalProperties": false,
         "properties": {
@@ -396,6 +1090,108 @@
         "title": "InvitationInput",
         "type": "object"
       },
+      "JobResponse": {
+        "properties": {
+          "attempts": {
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "stage": {
+            "title": "Stage",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "created_at",
+          "status",
+          "stage",
+          "kind",
+          "document_id",
+          "error_code",
+          "attempts"
+        ],
+        "title": "JobResponse",
+        "type": "object"
+      },
+      "JsonValue": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "integer"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "items": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
       "LivenessResponse": {
         "additionalProperties": false,
         "properties": {
@@ -418,6 +1214,202 @@
           }
         },
         "title": "LivenessResponse",
+        "type": "object"
+      },
+      "LocatorResponse": {
+        "properties": {
+          "cells": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/CellResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cells"
+          },
+          "hidden_columns": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Hidden Columns",
+            "type": "array"
+          },
+          "hidden_row": {
+            "default": false,
+            "title": "Hidden Row",
+            "type": "boolean"
+          },
+          "hidden_rows": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Hidden Rows",
+            "type": "array"
+          },
+          "hidden_sheet": {
+            "default": false,
+            "title": "Hidden Sheet",
+            "type": "boolean"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "line": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Line"
+          },
+          "merged_ranges": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Merged Ranges",
+            "type": "array"
+          },
+          "method": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Method"
+          },
+          "offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offset"
+          },
+          "original_length": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Original Length"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page"
+          },
+          "page_height": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Height"
+          },
+          "page_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Status"
+          },
+          "page_width": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Width"
+          },
+          "range": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Range"
+          },
+          "rotation": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rotation"
+          },
+          "sheet": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sheet"
+          },
+          "sheet_inventory": {
+            "default": false,
+            "title": "Sheet Inventory",
+            "type": "boolean"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "LocatorResponse",
         "type": "object"
       },
       "Login": {
@@ -479,6 +1471,31 @@
         "title": "MeasurementInput",
         "type": "object"
       },
+      "MemberSummary": {
+        "properties": {
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "user_id": {
+            "format": "uuid",
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "user_id",
+          "display_name"
+        ],
+        "title": "MemberSummary",
+        "type": "object"
+      },
       "MembershipEdit": {
         "additionalProperties": false,
         "properties": {
@@ -515,6 +1532,194 @@
           "expected_version"
         ],
         "title": "MembershipEdit",
+        "type": "object"
+      },
+      "ObservationResponse": {
+        "properties": {
+          "availability": {
+            "title": "Availability",
+            "type": "string"
+          },
+          "context": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Context",
+            "type": "object"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "document_id": {
+            "format": "uuid",
+            "title": "Document Id",
+            "type": "string"
+          },
+          "field": {
+            "title": "Field",
+            "type": "string"
+          },
+          "group_key": {
+            "title": "Group Key",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "method": {
+            "title": "Method",
+            "type": "string"
+          },
+          "pipeline_version": {
+            "title": "Pipeline Version",
+            "type": "string"
+          },
+          "raw_value": {
+            "title": "Raw Value",
+            "type": "string"
+          },
+          "source_id": {
+            "format": "uuid",
+            "title": "Source Id",
+            "type": "string"
+          },
+          "support_status": {
+            "title": "Support Status",
+            "type": "string"
+          },
+          "supporting_source_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Supporting Source Ids",
+            "type": "array"
+          },
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "created_at",
+          "field",
+          "value",
+          "context",
+          "source_id",
+          "supporting_source_ids",
+          "document_id",
+          "method",
+          "warnings",
+          "availability",
+          "support_status",
+          "group_key",
+          "raw_value",
+          "pipeline_version"
+        ],
+        "title": "ObservationResponse",
+        "type": "object"
+      },
+      "PackageResponse": {
+        "properties": {
+          "approval": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "input_version": {
+            "title": "Input Version",
+            "type": "integer"
+          },
+          "manifest": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Manifest",
+            "type": "object"
+          },
+          "manifest_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manifest Hash"
+          },
+          "revision_id": {
+            "format": "uuid",
+            "title": "Revision Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "superseded": {
+            "default": false,
+            "title": "Superseded",
+            "type": "boolean"
+          },
+          "template_version": {
+            "title": "Template Version",
+            "type": "string"
+          },
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "created_at",
+          "status",
+          "revision_id",
+          "input_version",
+          "manifest_hash",
+          "manifest",
+          "template_version"
+        ],
+        "title": "PackageResponse",
         "type": "object"
       },
       "ReadinessResponse": {
@@ -641,6 +1846,60 @@
         "title": "Registration",
         "type": "object"
       },
+      "RenewalCandidateResponse": {
+        "properties": {
+          "confirmed_for_current_period": {
+            "title": "Confirmed For Current Period",
+            "type": "boolean"
+          },
+          "context": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Context",
+            "type": "object"
+          },
+          "field": {
+            "title": "Field",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "prior_fact": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Prior Fact",
+            "type": "object"
+          },
+          "prior_revision_hash": {
+            "title": "Prior Revision Hash",
+            "type": "string"
+          },
+          "prior_revision_id": {
+            "format": "uuid",
+            "title": "Prior Revision Id",
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/JsonValue"
+          }
+        },
+        "required": [
+          "key",
+          "field",
+          "value",
+          "context",
+          "prior_revision_id",
+          "prior_revision_hash",
+          "prior_fact",
+          "confirmed_for_current_period"
+        ],
+        "title": "RenewalCandidateResponse",
+        "type": "object"
+      },
       "ReviewInput": {
         "additionalProperties": false,
         "properties": {
@@ -664,6 +1923,128 @@
           "decisions"
         ],
         "title": "ReviewInput",
+        "type": "object"
+      },
+      "ReviewStateResponse": {
+        "properties": {
+          "blockers": {
+            "items": {
+              "$ref": "#/components/schemas/BlockerResponse"
+            },
+            "title": "Blockers",
+            "type": "array"
+          },
+          "document_inventory": {
+            "items": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "type": "object"
+            },
+            "title": "Document Inventory",
+            "type": "array"
+          },
+          "exceptions": {
+            "items": {
+              "$ref": "#/components/schemas/ExceptionResponse"
+            },
+            "title": "Exceptions",
+            "type": "array"
+          },
+          "facts": {
+            "items": {
+              "$ref": "#/components/schemas/CanonicalFactResponse"
+            },
+            "title": "Facts",
+            "type": "array"
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/GroupResponse"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "input_version": {
+            "title": "Input Version",
+            "type": "integer"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "requirement_profile": {
+            "title": "Requirement Profile",
+            "type": "string"
+          },
+          "total_count": {
+            "title": "Total Count",
+            "type": "integer"
+          },
+          "verified_count": {
+            "title": "Verified Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ready",
+          "blockers",
+          "exceptions",
+          "groups",
+          "facts",
+          "verified_count",
+          "total_count",
+          "input_version",
+          "requirement_profile",
+          "document_inventory"
+        ],
+        "title": "ReviewStateResponse",
+        "type": "object"
+      },
+      "SourceResponse": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "document_id": {
+            "format": "uuid",
+            "title": "Document Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "locator": {
+            "$ref": "#/components/schemas/LocatorResponse"
+          },
+          "parser_version": {
+            "title": "Parser Version",
+            "type": "string"
+          },
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "created_at",
+          "document_id",
+          "text",
+          "locator",
+          "parser_version"
+        ],
+        "title": "SourceResponse",
         "type": "object"
       },
       "SubmissionEdit": {
@@ -885,20 +2266,224 @@
         "title": "SubmissionInput",
         "type": "object"
       },
-      "TaskEdit": {
-        "additionalProperties": false,
+      "SubmissionResponse": {
         "properties": {
-          "status": {
-            "enum": [
-              "open",
-              "completed"
+          "assigned_membership_id": {
+            "format": "uuid",
+            "title": "Assigned Membership Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "due_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ],
+            "title": "Due Date"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "input_version": {
+            "title": "Input Version",
+            "type": "integer"
+          },
+          "insured_id": {
+            "format": "uuid",
+            "title": "Insured Id",
+            "type": "string"
+          },
+          "insured_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Insured Name"
+          },
+          "intended_end": {
+            "format": "date",
+            "title": "Intended End",
+            "type": "string"
+          },
+          "intended_start": {
+            "format": "date",
+            "title": "Intended Start",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "loss_required_end": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loss Required End"
+          },
+          "loss_required_start": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loss Required Start"
+          },
+          "prior_submission_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prior Submission Id"
+          },
+          "renewal_candidates": {
+            "items": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "type": "object"
+            },
+            "title": "Renewal Candidates",
+            "type": "array"
+          },
+          "requirements": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Requirements",
+            "type": "object"
+          },
+          "revision_number": {
+            "title": "Revision Number",
+            "type": "integer"
+          },
+          "row_version": {
+            "title": "Row Version",
+            "type": "integer"
+          },
+          "status": {
             "title": "Status",
+            "type": "string"
+          },
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
             "type": "string"
           }
         },
         "required": [
-          "status"
+          "id",
+          "tenant_id",
+          "created_at",
+          "insured_id",
+          "prior_submission_id",
+          "title",
+          "kind",
+          "intended_start",
+          "intended_end",
+          "due_date",
+          "loss_required_start",
+          "loss_required_end",
+          "assigned_membership_id",
+          "status",
+          "input_version",
+          "row_version",
+          "revision_number",
+          "requirements",
+          "renewal_candidates"
+        ],
+        "title": "SubmissionResponse",
+        "type": "object"
+      },
+      "TaskEdit": {
+        "additionalProperties": false,
+        "properties": {
+          "due_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Due Date"
+          },
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "owner_membership_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Membership Id"
+          },
+          "resolution_reason": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Resolution Reason",
+            "type": "string"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "open",
+                  "completed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          }
+        },
+        "required": [
+          "expected_version"
         ],
         "title": "TaskEdit",
         "type": "object"
@@ -924,6 +2509,18 @@
             ],
             "title": "Due Date"
           },
+          "owner_membership_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Membership Id"
+          },
           "title": {
             "maxLength": 200,
             "minLength": 3,
@@ -935,6 +2532,96 @@
           "title"
         ],
         "title": "TaskInput",
+        "type": "object"
+      },
+      "TaskResponse": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "due_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Due Date"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "owner_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Id"
+          },
+          "resolution_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolution Reason"
+          },
+          "row_version": {
+            "title": "Row Version",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "submission_id": {
+            "format": "uuid",
+            "title": "Submission Id",
+            "type": "string"
+          },
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "created_at",
+          "submission_id",
+          "title",
+          "description",
+          "status",
+          "due_date",
+          "owner_id",
+          "row_version",
+          "resolution_reason"
+        ],
+        "title": "TaskResponse",
         "type": "object"
       },
       "TenantChoice": {
@@ -950,6 +2637,41 @@
           "tenant_id"
         ],
         "title": "TenantChoice",
+        "type": "object"
+      },
+      "TransitionInput": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 5,
+            "title": "Reason",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "draft",
+              "collecting",
+              "in_review",
+              "ready_for_package",
+              "closed",
+              "cancelled"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "expected_version",
+          "status"
+        ],
+        "title": "TransitionInput",
         "type": "object"
       },
       "ValidationError": {
@@ -1005,6 +2727,93 @@
           "expected_version"
         ],
         "title": "VersionInput",
+        "type": "object"
+      },
+      "WorkspaceResponse": {
+        "properties": {
+          "documents": {
+            "items": {
+              "$ref": "#/components/schemas/DocumentResponse"
+            },
+            "title": "Documents",
+            "type": "array"
+          },
+          "field_labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Field Labels",
+            "type": "object"
+          },
+          "insured": {
+            "$ref": "#/components/schemas/InsuredResponse"
+          },
+          "issues": {
+            "items": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "type": "object"
+            },
+            "title": "Issues",
+            "type": "array"
+          },
+          "jobs": {
+            "items": {
+              "$ref": "#/components/schemas/JobResponse"
+            },
+            "title": "Jobs",
+            "type": "array"
+          },
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/MemberSummary"
+            },
+            "title": "Members",
+            "type": "array"
+          },
+          "packages": {
+            "items": {
+              "$ref": "#/components/schemas/PackageResponse"
+            },
+            "title": "Packages",
+            "type": "array"
+          },
+          "readiness": {
+            "$ref": "#/components/schemas/ReviewStateResponse"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/SourceResponse"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "submission": {
+            "$ref": "#/components/schemas/SubmissionResponse"
+          },
+          "tasks": {
+            "items": {
+              "$ref": "#/components/schemas/TaskResponse"
+            },
+            "title": "Tasks",
+            "type": "array"
+          }
+        },
+        "required": [
+          "submission",
+          "insured",
+          "documents",
+          "jobs",
+          "readiness",
+          "sources",
+          "packages",
+          "tasks",
+          "members",
+          "issues",
+          "field_labels"
+        ],
+        "title": "WorkspaceResponse",
         "type": "object"
       }
     }
@@ -1307,6 +3116,25 @@
     "/api/v1/dashboard": {
       "get": {
         "operationId": "dashboard_api_v1_dashboard_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "owner_membership_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Owner Membership Id"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -1319,9 +3147,72 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "Dashboard",
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
+    "/api/v1/documents/{document_id}/classification": {
+      "post": {
+        "operationId": "classify_document_api_v1_documents__document_id__classification_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Document Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClassificationInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Classify Document",
         "tags": [
           "workspace"
         ]
@@ -1339,6 +3230,16 @@
               "format": "uuid",
               "title": "Document Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "inline",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Inline",
+              "type": "boolean"
             }
           }
         ],
@@ -1588,9 +3489,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Create Insured Api V1 Insureds Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/InsuredResponse"
                 }
               }
             },
@@ -1686,9 +3585,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Edit Insured Api V1 Insureds  Insured Id  Patch",
-                  "type": "object"
+                  "$ref": "#/components/schemas/InsuredResponse"
                 }
               }
             },
@@ -1817,9 +3714,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Retry Job Api V1 Jobs  Job Id  Retry Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/JobResponse"
                 }
               }
             },
@@ -2238,9 +4133,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Create Submission Api V1 Submissions Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/SubmissionResponse"
                 }
               }
             },
@@ -2283,9 +4176,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Workspace Api V1 Submissions  Submission Id  Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/WorkspaceResponse"
                 }
               }
             },
@@ -2336,9 +4227,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Edit Submission Api V1 Submissions  Submission Id  Patch",
-                  "type": "object"
+                  "$ref": "#/components/schemas/SubmissionResponse"
                 }
               }
             },
@@ -2452,9 +4341,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Upload Api V1 Submissions  Submission Id  Documents Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/DocumentResponse"
                 }
               }
             },
@@ -2649,9 +4536,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Generate Package Api V1 Submissions  Submission Id  Packages Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/PackageResponse"
                 }
               }
             },
@@ -2729,6 +4614,59 @@
         ]
       }
     },
+    "/api/v1/submissions/{submission_id}/status": {
+      "post": {
+        "operationId": "transition_submission_api_v1_submissions__submission_id__status_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "submission_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Submission Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransitionInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubmissionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Transition Submission",
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
     "/api/v1/submissions/{submission_id}/tasks": {
       "post": {
         "operationId": "create_task_api_v1_submissions__submission_id__tasks_post",
@@ -2759,9 +4697,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Create Task Api V1 Submissions  Submission Id  Tasks Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/TaskResponse"
                 }
               }
             },
@@ -2837,9 +4773,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Edit Task Api V1 Tasks  Task Id  Patch",
-                  "type": "object"
+                  "$ref": "#/components/schemas/TaskResponse"
                 }
               }
             },

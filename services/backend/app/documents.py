@@ -13,10 +13,10 @@ import tempfile
 import zipfile
 from dataclasses import dataclass
 from dataclasses import field as dc_field
-from datetime import date
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
+from xml.etree import ElementTree
 
 import httpx2
 import openpyxl
@@ -33,7 +33,7 @@ from app.domain.cgl import FIELD_LABELS, Context, normalize_money, validate_fact
 MAX_FILE = 50 * 1024 * 1024
 MAX_PAGES = 500
 MAX_TEXT_CHARS = 2_000_000
-PARSER_VERSION = "pdf-xlsx-1"
+PARSER_VERSION = "pdf-xlsx-2"
 
 
 class DocumentError(Exception):
@@ -59,6 +59,8 @@ class Extracted:
     raw_value: str
     method: str = "local-label-parser"
     warnings: list[str] = dc_field(default_factory=list)
+    availability: str = "available"
+    support_status: str = "supported"
 
 
 def validate_file(filename: str, data: bytes) -> str:
@@ -216,13 +218,60 @@ def parse_pdf(data: bytes) -> tuple[list[Block], int]:
         blocks: list[Block] = []
         characters = 0
         for index, page in enumerate(reader.pages):
-            text = page.extract_text() or ""
+            locator: dict[str, Any] = {
+                "kind": "pdf",
+                "page": index + 1,
+                "page_width": float(page.mediabox.width),
+                "page_height": float(page.mediabox.height),
+                "rotation": int(page.get("/Rotate", 0)),
+            }
+            resources = page.get("/Resources", {})
+            if isinstance(resources, IndirectObject):
+                resources = resources.get_object()
+            if (
+                page.get_contents() is None
+                and not resources.get("/XObject")
+                and not page.get("/Annots")
+            ):
+                blocks.append(Block("", {**locator, "page_status": "blank"}))
+                continue
+            try:
+                text = page.extract_text() or ""
+            except Exception:
+                text = ""
             method = "native-pdf"
+            page_warnings: list[str] = []
             if len(text.strip()) < 20:
-                text = ocr_page(data, index)
-                method = "ocr"
+                try:
+                    ocr_text = ocr_page(data, index)
+                    if ocr_text.strip():
+                        text, method = ocr_text, "ocr"
+                except DocumentError as error:
+                    page_warnings.append(error.code)
             if not text.strip():
-                raise DocumentError("UNREADABLE_PAGE")
+                blocks.append(
+                    Block(
+                        "",
+                        {
+                            **locator,
+                            "page_status": "unreadable",
+                            "warnings": page_warnings
+                            + ["UNREADABLE_PAGE: supplied page content could not be read"],
+                        },
+                    )
+                )
+                continue
+            blocks.append(
+                Block(
+                    "",
+                    {
+                        **locator,
+                        "page_status": "partial" if page_warnings else "readable",
+                        "method": method,
+                        "warnings": page_warnings,
+                    },
+                )
+            )
             characters += len(text)
             if characters > MAX_TEXT_CHARS:
                 raise DocumentError("TEXT_LIMIT")
@@ -233,11 +282,17 @@ def parse_pdf(data: bytes) -> tuple[list[Block], int]:
                         Block(
                             line[:8000],
                             {
-                                "kind": "pdf",
-                                "page": index + 1,
+                                **locator,
                                 "line": line_number + 1,
                                 "offset": offset,
                                 "method": method,
+                                "truncated": len(line) > 8000,
+                                "original_length": len(line),
+                                "warnings": [
+                                    "Source line exceeds the excerpt limit; review omitted content in the original"
+                                ]
+                                if len(line) > 8000
+                                else [],
                             },
                         )
                     )
@@ -273,16 +328,65 @@ def parse_xlsx(data: bytes) -> tuple[list[Block], int]:
                 and sheet.max_column > 100
             ):
                 raise DocumentError("SPREADSHEET_CELL_LIMIT")
+            hidden_rows: set[int] = set()
+            hidden_columns: set[int] = set()
+            merged_ranges: list[str] = []
+            worksheet_path = getattr(sheet, "_worksheet_path", None)
+            if not isinstance(worksheet_path, str):
+                raise DocumentError("SPREADSHEET_METADATA_UNAVAILABLE")
+            with zipfile.ZipFile(io.BytesIO(data)) as archive, archive.open(worksheet_path) as xml:
+                for _, element in ElementTree.iterparse(xml, events=("end",)):
+                    tag = element.tag.rsplit("}", 1)[-1]
+                    if tag == "row" and element.get("hidden") == "1":
+                        hidden_rows.add(int(element.attrib["r"]))
+                    elif tag == "col" and element.get("hidden") == "1":
+                        hidden_columns.update(
+                            range(
+                                int(element.attrib["min"]), min(int(element.attrib["max"]), 100) + 1
+                            )
+                        )
+                    elif tag == "mergeCell":
+                        merged_ranges.append(element.attrib["ref"])
+                        if len(merged_ranges) > 2000:
+                            raise DocumentError("SPREADSHEET_MERGE_LIMIT")
+                    element.clear()
+            sheet_inventory_block = Block(
+                "",
+                {
+                    "kind": "xlsx",
+                    "sheet": sheet.title,
+                    "sheet_inventory": True,
+                    "hidden_sheet": sheet.sheet_state != "visible",
+                    "merged_ranges": merged_ranges,
+                    "hidden_rows": sorted(hidden_rows),
+                    "hidden_columns": sorted(hidden_columns),
+                },
+            )
             for row_number, (row, cached_row) in enumerate(
                 zip(sheet.iter_rows(), cached.iter_rows(), strict=True), 1
             ):
                 labels: list[str] = []
                 warnings: list[str] = []
+                cell_metadata: list[dict[str, Any]] = []
                 for cell, cached_cell in zip(row, cached_row, strict=True):
                     cells_seen += 1
                     if cells_seen > 100000:
                         raise DocumentError("SPREADSHEET_CELL_LIMIT")
                     value = cell.value
+                    if value is not None:
+                        cell_metadata.append(
+                            {
+                                "coordinate": cell.coordinate,
+                                "raw_value": str(value),
+                                "number_format": cell.number_format,
+                                "data_type": cell.data_type,
+                                "formula": str(value) if cell.data_type == "f" else None,
+                                "cached_value": str(cached_cell.value)
+                                if cached_cell.value is not None
+                                else None,
+                                "hidden_column": cell.column in hidden_columns,
+                            }
+                        )
                     if cell.data_type == "f":
                         value = cached_cell.value
                         warnings.append(
@@ -293,6 +397,18 @@ def parse_xlsx(data: bytes) -> tuple[list[Block], int]:
                     if value is not None:
                         labels.append(str(value))
                 if labels:
+                    if len(": ".join(labels)) > 8000:
+                        warnings.append(
+                            "Source row exceeds the excerpt limit; review omitted content in the original"
+                        )
+                    if (
+                        row_number in hidden_rows
+                        or any(c["hidden_column"] for c in cell_metadata)
+                        or sheet.sheet_state != "visible"
+                    ):
+                        warnings.append(
+                            "Source includes hidden spreadsheet content; review its applicability"
+                        )
                     characters += sum(len(label) for label in labels)
                     if characters > MAX_TEXT_CHARS:
                         raise DocumentError("TEXT_LIMIT")
@@ -305,9 +421,13 @@ def parse_xlsx(data: bytes) -> tuple[list[Block], int]:
                                 "range": f"A{row_number}:{get_column_letter(len(row))}{row_number}",
                                 "hidden_sheet": sheet.sheet_state != "visible",
                                 "warnings": warnings,
+                                "cells": cell_metadata,
+                                "hidden_row": row_number in hidden_rows,
+                                "truncated": len(": ".join(labels)) > 8000,
                             },
                         )
                     )
+            blocks.append(sheet_inventory_block)
         return blocks, len(formulas.worksheets)
     finally:
         formulas.close()
@@ -331,6 +451,8 @@ LABELS = {
     "insurer": "policy.carrier",
     "policy effective": "policy.effective",
     "policy expiration": "policy.expiration",
+    "referenced endorsement": "policy.referenced_endorsement",
+    "endorsement form": "policy.endorsement_form",
     "each occurrence limit": "coverage.each_occurrence",
     "general aggregate limit": "coverage.general_aggregate",
     "products completed operations aggregate": "coverage.products_aggregate",
@@ -356,7 +478,7 @@ BASES = {
 
 
 def classify(blocks: list[Block]) -> str:
-    text = " ".join(b.text for b in blocks[:20]).lower()
+    text = " ".join(b.text for b in blocks).lower()
     if "loss run" in text:
         return "loss_runs"
     if "application" in text:
@@ -368,134 +490,401 @@ def classify(blocks: list[Block]) -> str:
     return "unknown"
 
 
+def is_section_heading(text: str) -> bool:
+    return bool(
+        re.fullmatch(
+            r"(?:FICTIONAL\s+)?(?:(?:CGL|COMMERCIAL GENERAL LIABILITY|EXPIRING POLICY|POLICY)\s+)?"
+            r"(?:APPLICATION|DECLARATIONS|LOSS RUNS?|EXPOSURE SCHEDULE)(?:\s*[-–]\s*SYNTHETIC ONLY)?",
+            text.strip(),
+            re.I,
+        )
+    )
+
+
 def local_extract(blocks: list[Block], document_type: str) -> list[Extracted]:
+    """Read explicit labels in source order. Context never flows backward or across pages.
+
+    This intentionally bounded adapter abstains on unlabeled prose and table layouts.
+    A changed policy/period starts a new context; citations contain only its own headers.
+    """
     result: list[Extracted] = []
-    exposure_context: dict[str, Any] = {}
-    period_sources: list[UUID] = []
-    loss_context: dict[str, Any] = {}
-    loss_sources: list[UUID] = []
-    currency: str | None = None
-    policy_reference: str | None = None
-    policy_sources: list[UUID] = []
-    classification_system: str | None = None
-    classification_sources: list[UUID] = []
-    for block in blocks:
-        key, separator, raw = block.text.partition(":")
-        if not separator:
-            continue
-        key, raw = key.strip().lower(), raw.strip()
-        if key == "policy number":
-            policy_reference = raw
-            policy_sources.append(block.id)
-        if key == "classification system":
-            classification_system = raw
-            classification_sources.append(block.id)
-        if key == "currency" and re.fullmatch("[A-Z]{3}", raw):
-            currency = raw
-            period_sources.append(block.id)
-        if key in {"exposure period", "loss report period"}:
-            dates = re.findall(r"\d{4}-\d{2}-\d{2}", raw)
-            if len(dates) == 2:
-                target = exposure_context if key == "exposure period" else loss_context
-                target.update(period_start=dates[0], period_end=dates[1])
-                (period_sources if key == "exposure period" else loss_sources).append(block.id)
-        if key == "exposure status" and raw in {"actual", "estimate", "historical"}:
-            exposure_context["role"] = raw
-            period_sources.append(block.id)
-        if key == "valuation date":
-            try:
-                loss_context["as_of"] = date.fromisoformat(raw).isoformat()
-                loss_sources.append(block.id)
-            except ValueError:
-                pass
-    for block in blocks:
-        key, separator, raw = block.text.partition(":")
-        if not separator:
-            continue
-        key, raw = key.strip().lower().replace("/", " ").replace("-", " "), raw.strip()
-        if raw.lower() in {"not supplied", "not provided", "unknown", "n/a", ""}:
-            continue
-        field: str | None = None
-        value: Any = raw
-        context: dict[str, Any] = {}
-        citations = [block.id]
-        if key in BASES:
-            field = "exposure.amount"
-            basis, unit = BASES[key]
-            context = {**exposure_context, "basis": basis, "unit": unit}
-            if unit == "USD":
-                if not currency and "$" not in raw:
-                    continue
-                context["currency"] = currency or "USD"
-            citations += period_sources
-        else:
-            requested = key.startswith("requested ")
-            normalized_key = key.removeprefix("requested ")
-            field = LABELS.get(normalized_key)
-            if field and field.startswith(("coverage.", "policy.")):
-                context["role"] = "requested" if requested else "existing"
-                if policy_reference and not requested:
-                    context["policy_reference"] = policy_reference
-                    citations += policy_sources
-                if field.startswith("coverage.") and field not in {
-                    "coverage.trigger",
-                    "coverage.endorsement",
-                    "coverage.additional_insured",
-                }:
-                    if not currency and "$" not in raw:
-                        continue
-                    context["currency"] = currency or "USD"
-                    citations += period_sources
-        if field == "operations.class_code" and classification_system:
-            context["classification_system"] = classification_system
-            citations += classification_sources
-        if key == "loss report period" and all(
-            k in loss_context for k in ["period_start", "period_end", "as_of"]
-        ):
-            field, value, context = "loss.period", "Loss report supplied", loss_context
-            citations += loss_sources
-        if key == "no losses reported":
-            dates = re.findall(r"\d{4}-\d{2}-\d{2}", raw)
-            if len(dates) == 2:
-                field, context = (
-                    "loss.no_losses",
-                    {"period_start": dates[0], "period_end": dates[1]},
-                )
-        if key == "claim":
-            try:
-                identity, *parts = [s.strip() for s in raw.split("|")]
-                values = dict(p.split("=", 1) for p in parts)
-                value = {"claim_id": identity, **values}
-                field, context = (
-                    "loss.claim",
-                    {"currency": currency or "USD"} if currency or "$" in raw else {},
-                )
-                citations += loss_sources
-            except (ValueError, KeyError):
-                continue
-        if field:
+    context_values: dict[str, Any] = {}
+    context_sources: dict[str, UUID] = {}
+    segment: Any = None
+    loss_period: Block | None = None
+
+    def clear(*names: str) -> None:
+        for name in names:
+            context_values.pop(name, None)
+            context_sources.pop(name, None)
+
+    def emit(
+        field: str,
+        raw: str,
+        value: Any,
+        context: dict[str, Any],
+        citations: list[UUID],
+        block: Block,
+    ) -> None:
+        availability = {
+            "unknown": "unknown",
+            "n/a": "not_applicable",
+            "not applicable": "not_applicable",
+            "not supplied": "not_supplied",
+            "not provided": "not_supplied",
+            "": "not_supplied",
+            "unreadable": "unreadable",
+        }.get(raw.casefold(), "available")
+        warnings = list(block.locator.get("warnings", []))
+        if block.locator.get("method") == "ocr":
+            warnings.append("OCR text requires verification")
+        if block.locator.get("truncated"):
+            availability, value = "unreadable", None
+            warnings.append("The source excerpt is truncated; review the full original")
+        if availability == "available":
             try:
                 value, context = validate_fact(field, value, context)
-            except (ValueError, TypeError):
-                continue  # Abstain; review requirements will surface missing material data.
-            result.append(
-                Extracted(
-                    field,
-                    value,
-                    context,
-                    list(dict.fromkeys(citations)),
-                    raw,
-                    warnings=list(block.locator.get("warnings", []))
-                    + (
-                        ["OCR text requires verification"]
-                        if block.locator.get("method") == "ocr"
-                        else []
-                    ),
+            except (ValueError, TypeError) as error:
+                availability, value = "unreadable", None
+                warnings.append("Cannot associate or parse material field: " + str(error))
+        else:
+            value = None
+            warnings.append("Source availability: " + availability)
+        result.append(
+            Extracted(
+                field,
+                value,
+                dict(context),
+                list(dict.fromkeys(citations)),
+                raw,
+                warnings=warnings,
+                availability=availability,
+            )
+        )
+
+    for block in blocks:
+        current_segment = (
+            block.locator.get("kind"),
+            block.locator.get("page"),
+            block.locator.get("sheet"),
+        )
+        if current_segment != segment or block.locator.get("section_start"):
+            if loss_period is not None:
+                emit(
+                    "loss.period",
+                    loss_period.text.partition(":")[2].strip(),
+                    None,
+                    {},
+                    [loss_period.id],
+                    loss_period,
+                )
+            context_values, context_sources, loss_period = {}, {}, None
+            segment = current_segment
+        key, separator, raw = block.text.partition(":")
+        if not separator:
+            # Explicit document headings inside a mixed PDF form a fresh segment.
+            if is_section_heading(key) or block.text.strip():
+                if loss_period is not None:
+                    emit(
+                        "loss.period",
+                        loss_period.text.partition(":")[2].strip(),
+                        None,
+                        {},
+                        [loss_period.id],
+                        loss_period,
+                    )
+                context_values, context_sources, loss_period = {}, {}, None
+            continue
+        key = key.strip().lower().replace("/", " ").replace("-", " ")
+        raw = raw.strip()
+        if key == "policy number":
+            if "policy_reference" in context_values:
+                if loss_period is not None:
+                    emit(
+                        "loss.period",
+                        loss_period.text.partition(":")[2].strip(),
+                        None,
+                        {},
+                        [loss_period.id],
+                        loss_period,
+                    )
+                    loss_period = None
+                clear(*list(context_values))
+            else:
+                clear("policy_reference", "coverage_role")
+            context_values["policy_reference"], context_sources["policy_reference"] = raw, block.id
+        if key in {
+            "currency",
+            "classification system",
+            "scope",
+            "location id",
+            "entity id",
+            "coverage role",
+            "exposure status",
+        }:
+            name = {
+                "classification system": "classification_system",
+                "exposure status": "role",
+                "coverage role": "coverage_role",
+                "location id": "location_id",
+                "entity id": "entity_id",
+            }.get(key, key)
+            context_values[name], context_sources[name] = raw, block.id
+        if key in {"exposure period", "loss report period"}:
+            prefix = "exposure" if key == "exposure period" else "loss"
+            had_period = prefix + ".period_start" in context_values
+            for name in ("period_start", "period_end", "as_of", "role"):
+                clear(prefix + "." + name)
+            if prefix == "exposure":
+                if had_period:
+                    clear("role")
+            else:
+                if loss_period is not None:
+                    emit(
+                        "loss.period",
+                        loss_period.text.partition(":")[2].strip(),
+                        None,
+                        {},
+                        [loss_period.id],
+                        loss_period,
+                    )
+                loss_period = block
+            dates = re.findall(r"\d{4}-\d{2}-\d{2}", raw)
+            if len(dates) == 2:
+                for name, period_value in zip(("period_start", "period_end"), dates, strict=True):
+                    context_values[prefix + "." + name] = period_value
+                    context_sources[prefix + "." + name] = block.id
+        if key == "valuation date":
+            context_values["loss.as_of"], context_sources["loss.as_of"] = raw, block.id
+            if loss_period is not None:
+                loss_context = {
+                    name: context_values["loss." + name]
+                    for name in ("period_start", "period_end", "as_of")
+                    if "loss." + name in context_values
+                }
+                emit(
+                    "loss.period",
+                    loss_period.text.partition(":")[2].strip(),
+                    "Loss report supplied",
+                    loss_context,
+                    [loss_period.id, block.id],
+                    loss_period,
+                )
+                loss_period = None
+        requested = key.startswith("requested ")
+        normalized_key = key.removeprefix("requested ")
+        field = "exposure.amount" if key in BASES else LABELS.get(normalized_key)
+        context: dict[str, Any] = {}
+        citations = [block.id]
+        value: Any = raw
+
+        def use(
+            name: str,
+            source_name: str | None = None,
+            *,
+            context_values: dict[str, Any] = context_values,
+            context_sources: dict[str, UUID] = context_sources,
+            context: dict[str, Any] = context,
+            citations: list[UUID] = citations,
+        ) -> None:
+            source_name = source_name or name
+            if source_name in context_values:
+                context[name] = context_values[source_name]
+                citations.append(context_sources[source_name])
+
+        for name in ("scope", "entity_id", "location_id"):
+            use(name)
+        if key in BASES:
+            basis, unit = BASES[key]
+            context.update(basis=basis, unit="money" if unit == "USD" else unit)
+            for name in ("period_start", "period_end"):
+                use(name, "exposure." + name)
+            use("role")
+            if unit == "USD":
+                use("currency")
+        if field and field.startswith(("coverage.", "policy.")):
+            context["role"] = (
+                "requested"
+                if requested
+                else context_values.get(
+                    "coverage_role",
+                    "existing"
+                    if context_values.get("policy_reference") or field.startswith("policy.")
+                    else "unspecified",
                 )
             )
+            if "coverage_role" in context_sources and not requested:
+                citations.append(context_sources["coverage_role"])
+            if not requested:
+                use("policy_reference")
+            if field.startswith("coverage.") and field not in {
+                "coverage.trigger",
+                "coverage.endorsement",
+                "coverage.additional_insured",
+            }:
+                use("currency")
+        if field == "operations.class_code":
+            use("classification_system")
+        if key == "no losses reported":
+            dates = re.findall(r"\d{4}-\d{2}-\d{2}", raw)
+            field = "loss.no_losses"
+            if len(dates) == 2:
+                context.update(period_start=dates[0], period_end=dates[1])
+        if key == "claim":
+            field = "loss.claim"
+            use("currency")
+            try:
+                identity, *parts = [s.strip() for s in raw.split("|")]
+                value = {"claim_id": identity, **dict(p.split("=", 1) for p in parts)}
+            except ValueError:
+                value = None
+        if field:
+            monetary = (
+                field == "exposure.amount"
+                and context.get("unit") == "money"
+                or field.startswith("coverage.")
+                and field
+                not in {"coverage.trigger", "coverage.endorsement", "coverage.additional_insured"}
+            )
+            if monetary:
+                inline = re.fullmatch(r"([A-Z]{3})\s+([\d,$. ]+)", raw)
+                if inline:
+                    supplied_currency = inline.group(1)
+                    if context.get("currency") and context["currency"] != supplied_currency:
+                        # An inline contradiction must not silently replace a header.
+                        value = None
+                    else:
+                        context["currency"], value = supplied_currency, inline.group(2)
+            emit(field, raw, value, context, citations, block)
+        elif key not in {
+            "currency",
+            "classification system",
+            "scope",
+            "location id",
+            "entity id",
+            "coverage role",
+            "exposure status",
+            "exposure period",
+            "loss report period",
+            "valuation date",
+        }:
+            if loss_period is not None:
+                emit(
+                    "loss.period",
+                    loss_period.text.partition(":")[2].strip(),
+                    None,
+                    {},
+                    [loss_period.id],
+                    loss_period,
+                )
+            context_values, context_sources, loss_period = {}, {}, None
+    if loss_period is not None:
+        emit(
+            "loss.period",
+            loss_period.text.partition(":")[2].strip(),
+            None,
+            {},
+            [loss_period.id],
+            loss_period,
+        )
     if len(result) > 500:
         raise DocumentError("EXTRACTION_FACT_LIMIT")
     return result
+
+
+def supports_fact(
+    blocks: list[Block], field: str, value: Any, context: dict[str, Any], source_ids: list[UUID]
+) -> bool:
+    """Require a matching field/value/context association, not a number anywhere in evidence.
+
+    Unrecognized prose remains unsupported. This bounded validator does not claim general
+    semantic understanding of arbitrary insurance forms.
+    """
+    refs = set(source_ids)
+    try:
+        normalized_value, normalized_context = validate_fact(field, value, context)
+    except (ValueError, TypeError):
+        return False
+    for candidate in local_extract(blocks, classify(blocks)):
+        if (
+            candidate.availability == "available"
+            and candidate.field == field
+            and canonical_json(candidate.value) == canonical_json(normalized_value)
+            and canonical_json(candidate.context) == canonical_json(normalized_context)
+            and set(candidate.source_ids).issubset(refs)
+        ):
+            return True
+    return False
+
+
+def processing_inventory(blocks: list[Block], extracted: list[Extracted]) -> dict[str, Any]:
+    segments: list[dict[str, Any]] = []
+    current: list[Block] = []
+    previous_location: Any = None
+    for block in blocks:
+        location = (
+            block.locator.get("kind"),
+            block.locator.get("page"),
+            block.locator.get("sheet"),
+        )
+        heading = is_section_heading(block.text)
+        if current and (location != previous_location or heading):
+            segments.append(
+                {
+                    "type": classify(current),
+                    "source_ids": [str(b.id) for b in current],
+                    "location": current[0].locator,
+                }
+            )
+            current = []
+        current.append(block)
+        previous_location = location
+    if current:
+        segments.append(
+            {
+                "type": classify(current),
+                "source_ids": [str(b.id) for b in current],
+                "location": current[0].locator,
+            }
+        )
+    covered = {
+        ref for fact in extracted if fact.support_status == "supported" for ref in fact.source_ids
+    }
+    unmapped = [
+        b
+        for b in blocks
+        if b.text.strip() and b.id not in covered and not is_section_heading(b.text)
+    ]
+    return {
+        "parser_version": PARSER_VERSION,
+        "pages": [b.locator for b in blocks if b.locator.get("page_status")],
+        "sheets": [b.locator for b in blocks if b.locator.get("sheet_inventory")],
+        "segments": segments,
+        "fields": [
+            {
+                "field": f.field,
+                "context": f.context,
+                "availability": f.availability,
+                "support_status": f.support_status,
+                "source_ids": [str(ref) for ref in f.source_ids],
+                "warnings": f.warnings,
+            }
+            for f in extracted
+        ],
+        "issues": [
+            {
+                "source_id": str(b.id),
+                "message": "Uninterpreted source content requires manual completeness review: "
+                + b.text,
+            }
+            for b in unmapped
+        ]
+        + [
+            {"source_id": str(b.id), "message": warning}
+            for b in blocks
+            for warning in b.locator.get("warnings", [])
+        ],
+    }
 
 
 class ProviderFact(BaseModel):
@@ -645,7 +1034,17 @@ def provider_extract(blocks: list[Block], configuration: Settings) -> list[Extra
                 fact.source_ids,
                 supporting[:8000],
                 method="structured-provider",
-                warnings=["Provider interpretation requires broker verification"],
+                warnings=["Provider interpretation requires broker verification"]
+                + (
+                    []
+                    if supports_fact(blocks, fact.field, value, context, fact.source_ids)
+                    else [
+                        "Unsupported field or context association; supply evidence or an attributed attestation"
+                    ]
+                ),
+                support_status="supported"
+                if supports_fact(blocks, fact.field, value, context, fact.source_ids)
+                else "unsupported",
             )
         )
     return result

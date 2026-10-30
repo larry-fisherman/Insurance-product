@@ -66,6 +66,7 @@ def fixtures() -> list[tuple[str, bytes]]:
             "Products completed operations aggregate: 2,000,000",
             "Coverage trigger: Occurrence",
             "Endorsement: DEMO-001 - Refer to attached original wording; no interpretation supplied",
+            "Endorsement form: DEMO-001 - Fictional specimen wording for synthetic regression only",
         ]
     )
     # Keep the entire claim in one cited line. The parser abstains if required components are absent.

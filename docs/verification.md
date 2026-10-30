@@ -1,5 +1,7 @@
 # Engineering verification — October 29, 2026
 
+The October 29 results and environment description below are historical. See the October 30 review-remediation verification at the end for the current changes and test environment.
+
 Scope: local synthetic CGL review MVP. These are local engineering results, not production, legal, insurance-domain, or SOC 2 approval. No paid AI-provider calls, real customer documents, remote CI runs, or public deployments were performed.
 
 ## Final results
@@ -43,3 +45,27 @@ The screenshot `.artifacts/approved-workspace.png`, evaluation JSON, backup dire
 ## Outstanding gates
 
 See [pilot-readiness.md](pilot-readiness.md) and [roadmap-status.md](roadmap-status.md). Managed identity/email verification, production cloud/TLS/KMS/IAM, live provider/vendor terms and performance, independent security and insurance-domain evaluation, approved retention/deletion, operational support/contracts/E&O, pricing and actual broker pilots remain uncompleted external/commercial work. Synthetic-only and local/test configuration gates remain enabled.
+
+## Review-remediation verification — October 30, 2026
+
+Scope: the R01–R10 corrections and additional workflow changes described in [review-remediation.md](review-remediation.md). These results do not establish complete functional MVP or pilot acceptance. That document identifies the remaining engineering requirements and external acceptance work.
+
+| Check                                    | Result                       | Evidence / limits                                                                                                                                                                                                                                                         |
+| ---------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Backend lint, formatting, strict types   | Pass                         | Ruff and mypy; 43 Python source files type-checked.                                                                                                                                                                                                                       |
+| Backend tests, including real PostgreSQL | 114 passed                   | Full `services/backend/tests` suite; 61 non-database and 53 database cases. Includes RLS, concurrency, migration up/down/drift, seeded legacy-evidence migration, review authority, exclusions, corrections, renewal, tasks, lifecycle, and parse checkpoint recovery.    |
+| Frontend lint and strict types           | Pass                         | `npm run lint` and `npm run typecheck`.                                                                                                                                                                                                                                   |
+| Frontend unit/component tests            | 22 passed across 4 files     | `npm test`; includes uncertain-response/reload/concurrent retry recovery and unsaved-form protection.                                                                                                                                                                     |
+| Optimized frontend build                 | Pass                         | `API_INTERNAL_URL=http://127.0.0.1:8000 NEXT_TELEMETRY_DISABLED=1 npm run build`; compilation only, no deployment.                                                                                                                                                        |
+| Generated contracts                      | Regenerated                  | Backend OpenAPI export and `npm run contracts:generate`; frontend compiles against the resulting types.                                                                                                                                                                   |
+| Synthetic regression evaluation          | 100 generated packets passed | All six measured accuracy/coverage ratios were 1.0; local median 0.0066 seconds and p95 0.0125 seconds. `.artifacts/review-final-evaluation.json`; the earlier evaluation limits still apply. No provider calls, semantic-package accuracy, or real-world quality claims. |
+
+Browser acceptance: **2 passed, 1 skipped** in 39.9 seconds. The complete fictional review/approval/export workflow and mobile navigation passed. The workflow also opened cited PDF pages and spreadsheet cells. The normal unsigned upload/scanning case was skipped because ClamAV was unavailable. An earlier run under concurrent heavy checks timed out; the final isolated run passed without test retries.
+
+Changed/new code and documentation pass Prettier, and `git diff --check` passes. Repository-wide formatting still reports the preexisting, unchanged `review.md`; it was preserved as the user's review input.
+
+Docker was unavailable. Database checks used an isolated native PostgreSQL 16 cluster with disposable databases. The cluster identity was checked against its temporary data directory before applying browser-test migrations. The developer's persisted database, private configuration, and existing volumes were preserved. Browser checks used temporary loopback services, filesystem storage, local extraction, and a polling worker without Redis; they do not establish Redis, scanner, or production-deployment acceptance.
+
+The temporary API, web, polling worker, and dedicated PostgreSQL cluster were stopped after verification. Their temporary database and test object directory were removed. This supersedes the historical environment-left-running description above; no remediation test services remain running. Test output, evaluation JSON, browser results, and the fictional screenshot remain in ignored `.artifacts` paths.
+
+Production/synthetic-only startup gates remain unchanged. No customer documents, paid-provider calls, remote CI, public deployment, independent assessment, or new backup/restore drill was performed for this remediation.

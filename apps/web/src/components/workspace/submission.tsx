@@ -151,10 +151,50 @@ function Documents({
                         <Field title="Reason for exclusion" name="reason" required />
                         <p className="muted">
                           This removes its facts from the active review and requires a new
-                          approval.
+                          approval. The excluded document stays in completeness
+                          accounting; an authorized approver must accept any resulting
+                          omission.
                         </p>
                       </Form>
                     </details>
+                    {doc.processing_status === "completed" && (
+                      <details>
+                        <summary>Correct document classification</summary>
+                        <Form
+                          submit="Save classification"
+                          action={async (form) => {
+                            await send("/documents/" + doc.id + "/classification", {
+                              document_type: formText(form, "document_type"),
+                              reason: formText(form, "reason"),
+                            });
+                            await refresh();
+                          }}
+                        >
+                          <Field title="Document type" name="document_type">
+                            <select name="document_type" defaultValue={doc.document_type}>
+                              {[
+                                "application",
+                                "policy",
+                                "loss_runs",
+                                "exposure_schedule",
+                                "endorsement",
+                                "mixed",
+                                "unknown",
+                              ].map((kind) => (
+                                <option key={kind} value={kind}>
+                                  {label(kind)}
+                                </option>
+                              ))}
+                            </select>
+                          </Field>
+                          <Field
+                            title="Reason for classification correction"
+                            name="reason"
+                            required
+                          />
+                        </Form>
+                      </details>
+                    )}
                   </>
                 )}
               </div>
@@ -530,17 +570,55 @@ export function Tasks({
                 <Status value={task.status} />
                 {me.permissions.includes("reviews.write") && (
                   <Form
-                    submit={task.status === "open" ? "Complete task" : "Reopen task"}
-                    action={async () => {
+                    submit="Save task"
+                    action={async (form) => {
                       await send(
                         "/tasks/" + task.id,
-                        { status: task.status === "open" ? "completed" : "open" },
+                        {
+                          status: formText(form, "status"),
+                          expected_version: task.row_version,
+                          resolution_reason: formText(form, "resolution_reason"),
+                          due_date: optional(form, "due_date"),
+                          owner_membership_id:
+                            formText(form, "owner_membership_id") || me.membership_id,
+                        },
                         "PATCH",
                       );
                       await refresh();
                     }}
                   >
-                    <span />
+                    <Field title="Task status" name="status">
+                      <select name="status" defaultValue={task.status}>
+                        <option value="open">Open</option>
+                        <option value="completed">Completed</option>
+                      </select>
+                    </Field>
+                    <Field
+                      title="Due date"
+                      name="due_date"
+                      type="date"
+                      value={task.due_date ?? ""}
+                    />
+                    <Field title="Assigned member" name="owner_membership_id">
+                      <select
+                        name="owner_membership_id"
+                        defaultValue={
+                          data.members.find((m) => m.user_id === task.owner_id)?.id ??
+                          me.membership_id
+                        }
+                      >
+                        {data.members.map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.display_name}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field
+                      title="Resolution / reopening reason"
+                      name="resolution_reason"
+                      required
+                    />
                   </Form>
                 )}
               </div>
@@ -736,6 +814,17 @@ export function SubmissionWorkspace({ id, me }: { id: string; me: Me }) {
       </>
     );
   const s = data.submission;
+  const terminal = ["closed", "cancelled"].includes(s.status);
+  const workspaceMe = terminal
+    ? {
+        ...me,
+        permissions: me.permissions.filter(
+          (p) =>
+            !p.endsWith(".write") &&
+            !["exceptions.accept", "packages.generate", "packages.approve"].includes(p),
+        ),
+      }
+    : me;
   const pending = data.jobs.filter((j) =>
     ["queued", "running"].includes(j.status),
   ).length;
@@ -751,7 +840,9 @@ export function SubmissionWorkspace({ id, me }: { id: string; me: Me }) {
       >
         <Status value={s.status} />
         {me.permissions.includes("submissions.write") && (
-          <button onClick={() => setRenew(true)}>Create next renewal</button>
+          <button data-navigation onClick={() => setRenew(true)}>
+            Create next renewal
+          </button>
         )}
       </Heading>
       <div className="workspace-meta">
@@ -773,6 +864,38 @@ export function SubmissionWorkspace({ id, me }: { id: string; me: Me }) {
           {pending ? `· ${pending} processing` : ""}
         </span>
       </div>
+      {terminal && (
+        <Notice>
+          This submission is {s.status}. Its evidence and history remain available.
+        </Notice>
+      )}
+      {!terminal && me.permissions.includes("submissions.write") && (
+        <details className="panel padded">
+          <summary>Change submission status</summary>
+          <Form
+            submit="Update status"
+            action={async (form) => {
+              await send("/submissions/" + s.id + "/status", {
+                expected_version: s.row_version,
+                status: formText(form, "status"),
+                reason: formText(form, "reason"),
+              });
+              await refresh();
+            }}
+          >
+            <Field title="New status" name="status">
+              <select name="status">
+                <option value="collecting">Collecting documents</option>
+                <option value="in_review">In review</option>
+                <option value="ready_for_package">Ready for package</option>
+                <option value="closed">Closed</option>
+                <option value="cancelled">Cancelled</option>
+              </select>
+            </Field>
+            <Field title="Reason" name="reason" required />
+          </Form>
+        </details>
+      )}
       {error && <Notice error>{error} The values below may be out of date.</Notice>}
       <nav className="tabs" aria-label="Submission workspace">
         {[
@@ -847,7 +970,7 @@ export function SubmissionWorkspace({ id, me }: { id: string; me: Me }) {
               </Link>
             </section>
           </div>
-          <Readiness data={data} me={me} refresh={refresh} />
+          <Readiness data={data} me={workspaceMe} refresh={refresh} />
           <section className="panel padded">
             <h3>How this review works</h3>
             <p className="muted">
@@ -899,12 +1022,14 @@ export function SubmissionWorkspace({ id, me }: { id: string; me: Me }) {
           )}
         </>
       )}
-      {tab === "documents" && <Documents data={data} me={me} refresh={refresh} />}{" "}
-      {tab === "review" && <ReviewPanel data={data} me={me} refresh={refresh} />}{" "}
-      {tab === "tasks" && <Tasks data={data} me={me} refresh={refresh} />}{" "}
-      {tab === "packages" && <Packages data={data} me={me} refresh={refresh} />}{" "}
+      {tab === "documents" && (
+        <Documents data={data} me={workspaceMe} refresh={refresh} />
+      )}{" "}
+      {tab === "review" && <ReviewPanel data={data} me={workspaceMe} refresh={refresh} />}{" "}
+      {tab === "tasks" && <Tasks data={data} me={workspaceMe} refresh={refresh} />}{" "}
+      {tab === "packages" && <Packages data={data} me={workspaceMe} refresh={refresh} />}{" "}
       {tab === "audit" && <Audit id={id} />}{" "}
-      {tab === "settings" && <Settings data={data} me={me} refresh={refresh} />}
+      {tab === "settings" && <Settings data={data} me={workspaceMe} refresh={refresh} />}
     </>
   );
 }

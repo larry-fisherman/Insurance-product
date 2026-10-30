@@ -11,7 +11,7 @@ Authorization: user requested continuous implementation and review at the end on
 - Private filesystem/S3 adapters; local private shared volume; Celery/Redis outbox/leases/recovery; bounded safe upload and PDF/XLSX/OCR parsing; ClamAV quarantine; signed fictional fixtures; structured provider abstraction including optional OpenAI Responses adapter.
 - Broker review UI with source locations and original files; correction/omission/rejection/reasons; required readiness rules; manual attestations; explicit accepted missing-information exceptions.
 - Original PDF/XLSX/ZIP templates, deterministic reviewed-fact narrative, document index, manifest and snapshot, exact-file approval and freshness verification; manual export only.
-- Complete responsive dashboard/account/submission/review/tasks/package/settings flows and public marketing/security pages. Sites skill used in local-only repository mode; no Site registration/publication.
+- Responsive dashboard/account/submission/review/tasks/package/settings flows and public marketing/security pages. Sites skill used in local-only repository mode; no Site registration/publication.
 - Synthetic regression evaluation; unit/component, real-runtime PostgreSQL, and browser acceptance suites; local backup/disposable-restore tooling; operator and release-gate documentation.
 
 ## Deliberate scope choices
@@ -22,4 +22,8 @@ Canonical CGL facts are validated namespace/context records in immutable snapsho
 
 ## Verification record
 
-Final results are recorded in docs/verification.md: 35 backend unit, 39 real PostgreSQL, 15 frontend unit/component, and 3 browser checks passed, together with actual OCR/scanning, schema/OpenAPI consistency, synthetic regression evaluation, and consistent backup/disposable restore verification. Generated logs/screenshots/archives are local ignored artifacts, not customer data. Production and synthetic-mode-off startup remain blocked by configuration validation.
+Initial milestone results are recorded in docs/verification.md: 35 backend unit, 39 real PostgreSQL, 15 frontend unit/component, and 3 browser checks passed, together with actual OCR/scanning, schema/OpenAPI consistency, synthetic regression evaluation, and consistent backup/disposable restore verification. Generated logs/screenshots/archives are local ignored artifacts, not customer data. Production and synthetic-mode-off startup remain blocked by configuration validation.
+
+## October 29 review remediation
+
+See [review-remediation.md](review-remediation.md) for R01–R10, additional workflow changes, migrations through `0006_workspace`, current verification, and the remaining engineering/release blockers. The earlier milestone wording does not establish complete functional MVP acceptance.

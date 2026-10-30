@@ -37,6 +37,8 @@ export function reviewedContext(form: FormData): Record<string, Json> {
     "as_of",
     "classification_system",
     "policy_reference",
+    "entity_id",
+    "location_id",
   ]) {
     const value = formText(form, "context_" + key);
     if (value) context[key] = value;
@@ -65,6 +67,9 @@ export function FactEditor({
   const visible = new Set([
     "scope",
     "role",
+    ...(field === "insured.dba" || field.startsWith("location.") || exposure
+      ? ["entity_id", "location_id"]
+      : []),
     ...(currency ? ["currency"] : []),
     ...(period ? ["period_start", "period_end"] : []),
     ...(exposure ? ["basis", "unit"] : []),
@@ -152,6 +157,20 @@ export function FactEditor({
       )}
       <h3>Underwriting context</h3>
       <div className="form-grid">
+        {visible.has("entity_id") && (
+          <Field
+            title="Entity / DBA row identifier (if supplied)"
+            name="context_entity_id"
+            value={String(context.entity_id ?? "")}
+          />
+        )}
+        {visible.has("location_id") && (
+          <Field
+            title="Location row identifier (if supplied)"
+            name="context_location_id"
+            value={String(context.location_id ?? "")}
+          />
+        )}
         <Field
           title="Operation / location / entity scope"
           name="context_scope"
