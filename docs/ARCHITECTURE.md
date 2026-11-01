@@ -75,7 +75,7 @@ Shared review mechanics own actor attribution, concurrency, revisions, exception
 
 1. Upload creates a private immutable version, job, audit event, and outbox entry with tenant scope. Server-generated keys and content hashes identify files; filename is display metadata.
 2. A worker claims a lease and checks tenant, actor, job state, and source identity. Scanning gates normal document parsing. Redis is transport; PostgreSQL is the job source of truth.
-3. Bounded parsing commits source blocks and processing inventory before extraction. Recoverable page failures preserve usable content; retries reuse established sources. Durable per-page checkpoints and a stronger parser boundary remain planned.
+3. Bounded parsing commits source blocks and processing inventory before extraction. Recoverable page failures preserve usable content; retries reuse established sources. Full Compose uses the separate credential-free parser service. Durable per-page checkpoints and independent hosted isolation acceptance remain open.
 4. Extraction yields unverified observations. Strict schema, context, and source-association checks reject or flag unsupported output. Uninterpreted content stays in completeness accounting.
 5. Domain reconciliation produces explainable findings. Review checks row versions and evidence fingerprints before appending decisions. A correction's original citations are history unless separately validated as its current support.
 6. Readiness validates required facts, all source outcomes, and authorized exception dispositions. A revision freezes the reviewed payload and provenance.
@@ -97,7 +97,7 @@ Record material implementation choices in `docs/decisions/`. Schema evolution us
 
 ## Operational boundary
 
-Local backup/restore, queue recovery, and configuration procedures are in [operations](operations.md). Production identity, independent parser isolation, infrastructure encryption/IAM, observability, deletion/holds, and external vendor validation remain release work. An adapter's existence does not prove its deployment controls. See [SECURITY.md](SECURITY.md) and [ROADMAP.md](ROADMAP.md).
+Local backup/restore, queue recovery, and configuration procedures are in [operations](operations.md). Production identity, independent assessment of hosted parser isolation, infrastructure encryption/IAM, observability, deletion/holds, and external vendor validation remain release work. An adapter's existence does not prove its deployment controls. See [SECURITY.md](SECURITY.md) and [ROADMAP.md](ROADMAP.md).
 
 ## Web platform expansion
 

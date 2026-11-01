@@ -96,7 +96,7 @@ services:
       MARKETING_ORIGIN: ${MARKETING_ORIGIN:-http://127.0.0.1:3001}
       INQUIRY_INTERNAL_URL: http://inquiries:8010
     ports: ["127.0.0.1:3001:3001"]
-    networks: [public-intake]
+    networks: [public-edge, public-intake]
     depends_on:
       inquiries: { condition: service_healthy }
     init: true
@@ -158,6 +158,7 @@ volumes:
   signatures:
   public-inquiries:
 networks:
+  public-edge:
   public-intake:
     internal: true
   parsing:

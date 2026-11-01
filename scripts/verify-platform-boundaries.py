@@ -34,6 +34,8 @@ def main() -> None:
     assert not containers["parser"]["Mounts"], "Parser has a persistent mount"
     for service in ("parser", "inquiries"):
         assert not any(containers[service]["NetworkSettings"]["Ports"].values()), f"Private service has a published port: {service}"
+    for service in ("marketing", "web"):
+        assert any(containers[service]["NetworkSettings"]["Ports"].values()), f"Browser service has no published port: {service}"
     print("Verified: public and operations networks separated; parser worker-only; public/parser credentials, mounts, ports and runtime privileges bounded.")
 
 

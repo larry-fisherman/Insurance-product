@@ -27,7 +27,7 @@ def parse_document(
         return parse_pdf(data) if media_type == "application/pdf" else parse_xlsx(data)
     try:
         with (
-            httpx2.Client(timeout=130, follow_redirects=False) as client,
+            httpx2.Client(timeout=260, follow_redirects=False) as client,
             client.stream(
                 "POST",
                 configuration.parser_endpoint.rstrip("/") + "/parse",

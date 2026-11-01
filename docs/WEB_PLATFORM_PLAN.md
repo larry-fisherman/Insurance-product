@@ -1,6 +1,6 @@
 # Secure web platform architecture and implementation plan
 
-Designed October 31, 2026. Status: **implementation approved by the user; local synthetic implementation underway November 1, 2026**.
+Designed October 31, 2026. Status: **local synthetic platform implemented and workflow verified November 1, 2026; hosted integrations and release acceptance remain open**.
 
 The user approved implementation after this plan was drafted. That authorization covers local implementation and verification; it does not authorize public deployment, customer-data use, paid services, or external messages. Existing synthetic-only and local/test restrictions continue to apply. The current implementation is described in [architecture](ARCHITECTURE.md), [data model](DATA_MODEL.md), [security](SECURITY.md), and [review remediation](review-remediation.md).
 
@@ -35,7 +35,7 @@ The required customer outcome remains: **Upload the documents. Identify missing 
 
 The existing [product requirements](PRODUCT_REQUIREMENTS.md#non-goals-and-release-constraints) place billing outside the current build. The approved request expands that scope to subscription administration. Manual subscription records and limits are now implemented; payment processing and prices are not approved or connected. The [roadmap](ROADMAP.md) and [pilot gates](pilot-readiness.md) also leave managed identity, production operations, representative CGL evaluation, and commercial acceptance open.
 
-After plan approval, update the canonical product, architecture, data, security, roadmap, and implementation documents and add an ADR for the adopted boundaries. Until then, this proposal does not supersede their descriptions of the running system or waive any acceptance requirement from [plan.md](../plan.md).
+The approved local implementation updates the canonical product, architecture, data, security, roadmap, and implementation documents and records the adopted boundaries in ADR 0004. Proposed hosted integrations below remain future work and do not waive any acceptance requirement from [plan.md](../plan.md).
 
 ## Deployment and service architecture
 

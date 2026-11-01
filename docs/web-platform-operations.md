@@ -51,9 +51,9 @@ Statuses `restricted` and `cancelled` prevent new intake/generation and worker p
 
 ## Service boundaries and maintenance
 
-`marketing` and `inquiries` share only the internal `public-intake` network. The inquiry receiver has its own `public-inquiries` volume, no operations environment file and no exposed service port. `INQUIRY_DATABASE_URL` supports SQLite or a dedicated PostgreSQL psycopg connection; schema initialization is explicit through `python -m app.inquiries migrate`. The local entrypoint initializes it. `python -m app.inquiries count` prints only a count, not contact contents.
+`marketing` and `inquiries` share only the internal `public-intake` network. Marketing also joins a separate `public-edge` network so Docker can publish its loopback browser port; neither public network joins operations. The inquiry receiver has its own `public-inquiries` volume, no operations environment file and no exposed service port. `INQUIRY_DATABASE_URL` supports SQLite or a dedicated PostgreSQL psycopg connection; schema initialization is explicit through `python -m app.inquiries migrate`. The local entrypoint initializes it. `python -m app.inquiries count` prints only a count, not contact contents.
 
-`parser` has no operations environment, private-file volume, database connection or Redis connection. Its internal `parsing` network is shared only with `worker`. It accepts bounded PDF/XLSX bytes after worker-side scanning, starts a child with CPU/memory/file/descriptor limits, and returns bounded parsed blocks. Parser endpoint errors remain processing failures; normal documents never bypass scanning. Native test runs without `CGL_PARSER_ENDPOINT` use the local parser fallback.
+`parser` has no operations environment, private-file volume, database connection or Redis connection. Its internal `parsing` network is shared only with `worker`. It accepts bounded PDF/XLSX bytes after worker-side scanning, starts a child with CPU/memory/file/descriptor limits, and returns bounded parsed blocks. One child runs at a time; one additional request can wait, matching the two local worker processes. Further requests receive a retryable busy response. Parser endpoint errors remain processing failures; normal documents never bypass scanning. Native test runs without `CGL_PARSER_ENDPOINT` use the local parser fallback.
 
 Run `make verify-platform` to inspect runtime network/credential/mount/port separation without printing environment values. Use `docker compose --env-file services/backend/.env.app -f compose.full.yaml ps` for health and `make full-logs` for bounded processing diagnostics. Never print private environment files. The inquiry volume is separate from the existing operations backup; its backup, retention and restoration procedures remain a hosted-release prerequisite. Existing operations recovery guidance still applies.
 
@@ -65,6 +65,23 @@ Run `make verify-platform` to inspect runtime network/credential/mount/port sepa
 - Expired/orphaned upload-part cleanup, comprehensive resource/load/lease tests and hosted parser isolation validation.
 - The existing open CGL semantic, representative accuracy, forms/templates and workflow findings in [review remediation](review-remediation.md) and [pilot readiness](pilot-readiness.md). This platform work does not waive them.
 
-See [ADR 0004](decisions/0004-web-platform.md) for decisions and local deviations. Verification results are recorded with the implementation handoff; no production approval follows from passing synthetic tests.
+## Verification record — November 1, 2026
+
+All checks used local/generated fictional data. No paid provider calls, external messages, customer data or public deployment were involved.
+
+| Check                 | Evidence                                                                                                                                                                                                                                                    |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Backend               | `make check-api`: Ruff, mypy and 80 non-database tests passed, including bounded parser concurrency and credential rejection.                                                                                                                               |
+| PostgreSQL            | 58 database tests passed in the full suite; the subsequently added invitation idempotency/revocation regression passed separately. `make db-check` reported no new upgrade operations.                                                                      |
+| Frontend              | Formatting, lint, TypeScript and 23 unit tests passed. Both Next.js applications built successfully, including production Docker builds.                                                                                                                    |
+| Browser workflow      | `CGL_SCAN_ACCEPTANCE=1 make check-e2e`: all four tests passed. Covered source review/conflict resolution, exact-file approval and PDF export, mobile login, ordinary chunked PDF upload with ClamAV and processing, and isolated public inquiry submission. |
+| OCR and boundaries    | `make verify-ocr` passed for a generated scanned PDF with page/line references. `make verify-platform` passed for runtime networks, credentials, mounts, privileges and published/private ports.                                                            |
+| Extraction regression | `make evaluate` passed the generated synthetic regression. This is not representative insurance accuracy or priced-provider evidence.                                                                                                                       |
+
+`make full-up` also completed successfully with the final readiness checks: both websites, the API, parser, inquiry receiver and Redis became healthy. Worker and scheduler processes started; the browser workflow exercises their processing path. ClamAV was running for the ordinary-upload acceptance check.
+
+Live testing identified and corrected parser-slot contention, the marketing port's need for a separate edge network, and healthcheck Host-header handling. Temporary failures are not treated as successful runs; the browser suite and affected runtime checks were rerun after those corrections. Existing records, configuration and volumes were preserved.
+
+See [ADR 0004](decisions/0004-web-platform.md) for decisions and local deviations. No production approval follows from passing synthetic tests.
 
 For native Next.js runs, set `APPLICATION_ORIGIN` to match the operations host and `CGL_PUBLIC_ORIGIN`, and set `MARKETING_ORIGIN` to the separate public host. Marketing uses only these public origins and `INQUIRY_INTERNAL_URL`; never copy the backend environment into marketing. `npm run dev:marketing` starts the public app on port 3001. The full Compose stack supplies its isolated inquiry address automatically.

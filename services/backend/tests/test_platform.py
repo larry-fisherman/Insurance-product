@@ -165,3 +165,48 @@ def test_parser_subprocess_preserves_fictional_source_text() -> None:
     assert "error" not in result, result
     assert result["page_count"] == 1
     assert any("Fictional Parser Example" in block["text"] for block in result["blocks"])
+
+
+def test_parser_serializes_two_workers_and_rejects_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import os
+    import threading
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app import parser_service
+
+    for name in list(os.environ):
+        if name.startswith(("CGL_", "AWS_", "OPENAI_")):
+            monkeypatch.delenv(name)
+    active = 0
+    peak = 0
+    lock = threading.Lock()
+
+    def bounded_parse(data: bytes, media_type: str) -> dict[str, Any]:
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        time.sleep(0.1)
+        with lock:
+            active -= 1
+        return {"blocks": [], "page_count": 1}
+
+    monkeypatch.setattr(parser_service, "run_parser", bounded_parse)
+    with (
+        TestClient(parser_service.create_app()) as browser,
+        ThreadPoolExecutor(max_workers=2) as pool,
+    ):
+
+        def submit() -> int:
+            return browser.post(
+                "/parse", content=b"fictional", headers={"Content-Type": "application/pdf"}
+            ).status_code
+
+        results = [pool.submit(submit) for _ in range(2)]
+        assert [result.result() for result in results] == [200, 200]
+        assert peak == 1
+        monkeypatch.setenv("CGL_APP_SECRET", "fictional-misconfiguration")
+        assert submit() == 503

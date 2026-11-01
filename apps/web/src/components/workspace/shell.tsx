@@ -124,7 +124,14 @@ export function WorkspaceShell() {
             .map(([key, title, icon]) => (
               <Link
                 key={key}
-                className={section === key ? "active" : ""}
+                className={
+                  path === "/" + key || path.startsWith("/" + key + "/") ? "active" : ""
+                }
+                aria-current={
+                  path === "/" + key || path.startsWith("/" + key + "/")
+                    ? "page"
+                    : undefined
+                }
                 href={"/" + key}
               >
                 <span aria-hidden="true">{icon}</span>

@@ -113,6 +113,10 @@ test("fictional brokerage reviews evidence, approves exact files, and exports", 
   const response = await page.request.get((await exported.getAttribute("href"))!);
   expect(response.status()).toBe(200);
   expect((await response.body()).subarray(0, 4).toString()).toBe("%PDF");
+  await expect(
+    page.locator(".page-heading").getByText("approved", { exact: true }),
+  ).toBeVisible();
+  await page.evaluate(() => window.scrollTo(0, 0));
   await page.screenshot({ path: ".artifacts/approved-workspace.png", fullPage: true });
   await page.getByRole("button", { name: "History", exact: true }).click();
   await expect(page.getByText("package approved", { exact: true })).toBeVisible();

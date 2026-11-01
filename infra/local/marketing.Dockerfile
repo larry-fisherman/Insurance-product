@@ -20,5 +20,5 @@ COPY --from=build --chown=node:node /app/apps/marketing/.next/static ./apps/mark
 USER node
 EXPOSE 3001
 HEALTHCHECK --interval=15s --timeout=3s --start-period=15s --retries=3 \
- CMD node -e "fetch('http://127.0.0.1:3001',{headers:{host:new URL(process.env.MARKETING_ORIGIN || 'http://127.0.0.1:3001').host}}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+ CMD node -e "require('node:http').get('http://127.0.0.1:3001',{headers:{host:new URL(process.env.MARKETING_ORIGIN || 'http://127.0.0.1:3001').host}},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
 CMD ["node", "apps/marketing/server.js"]

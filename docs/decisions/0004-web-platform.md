@@ -21,5 +21,6 @@ The full Compose stack runs parsing/OCR in a credential-free service on a dedica
 ## Consequences and local deviations
 
 - Marketing inquiries use a separate local SQLite volume by default, with an independent PostgreSQL URL supported by the receiver. This avoids giving public intake any operations database credential. Hosted inquiry migrations, retention, rate/abuse controls and operational access still need acceptance.
+- Marketing alone joins a public edge network to publish its loopback port; its connection to inquiry intake uses a separate internal network. Neither network overlaps operations. The parser serializes one active child and one waiting request to bound resources without forcing the two local workers to retry routine simultaneous requests.
 - Marketing is deliberately non-indexable and labelled fictional-only in this environment. Real conversion measurement, approved claims/legal copy, production domains and pricing are outstanding.
 - The two applications can deploy independently, but this change does not deploy them. TLS, hosted IAM/storage, provider lifecycle/revocation integration, payment integration, email delivery, representative CGL acceptance and release gates remain open.

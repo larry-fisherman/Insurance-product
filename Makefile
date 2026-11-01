@@ -84,6 +84,7 @@ app-roles:
 
 full-up: db-config db-up app-config app-roles db-migrate-native
 	$(FULL_COMPOSE) up -d --build redis parser api worker scheduler web inquiries marketing
+	$(FULL_COMPOSE) up -d --wait --wait-timeout 120 redis parser api web inquiries marketing
 
 full-down:
 	$(FULL_COMPOSE) down

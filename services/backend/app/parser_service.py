@@ -53,6 +53,7 @@ def run_parser(data: bytes, media_type: str) -> dict[str, Any]:
 def create_app() -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     semaphore = asyncio.Semaphore(1)
+    slots = asyncio.Semaphore(2)  # One parser and one bounded waiting request.
 
     @app.get("/health")
     def health() -> dict[str, bool]:
@@ -73,9 +74,9 @@ def create_app() -> FastAPI:
         length = request.headers.get("content-length", "")
         if not length.isdigit() or not 1 <= int(length) <= MAX_INPUT:
             return JSONResponse({"error": "FILE_LIMIT"}, status_code=413)
-        if semaphore.locked():
+        if slots.locked():
             return JSONResponse({"error": "PARSER_BUSY"}, status_code=503)
-        async with semaphore:
+        async with slots, semaphore:
             data = bytearray()
             async for chunk in request.stream():
                 data.extend(chunk)
