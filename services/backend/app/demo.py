@@ -14,7 +14,16 @@ from app.api import store_document
 from app.common import audit
 from app.database.models import AppUser, Membership
 from app.domain.models import InsuredAccount, Submission, WorkItem
-from app.identity import Actor, Scope, check_origin, database, set_session, settings, throttle
+from app.identity import (
+    Actor,
+    Scope,
+    check_origin,
+    database,
+    require_local,
+    set_session,
+    settings,
+    throttle,
+)
 
 router = APIRouter(prefix="/api/v1", tags=["synthetic-demo"])
 
@@ -104,6 +113,7 @@ def fixtures() -> list[tuple[str, bytes]]:
 
 @router.post("/auth/demo", status_code=201)
 def demo(request: Request, response: Response) -> dict[str, Any]:
+    require_local(request)
     check_origin(request)
     throttle(request, "demo", 5)
     configuration = settings(request)

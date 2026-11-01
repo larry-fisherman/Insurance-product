@@ -1,12 +1,15 @@
 "use client";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { send } from "../../lib/workspace-api";
-import { Field, Form, Notice, formText } from "./primitives";
+import { navigateNewSession, send } from "../../lib/workspace-api";
+import { Field, Form, Notice, formText, useResource, Loading } from "./primitives";
 
 export function LoginScreen() {
-  const router = useRouter();
+  const {
+    data: config,
+    error: configError,
+    refresh: retryConfig,
+  } = useResource<{ mode: string; marketing_origin: string }>("/auth/config");
   const [mode, setMode] = useState("login"),
     [secret, setSecret] = useState(""),
     [codes, setCodes] = useState<string[]>([]),
@@ -17,7 +20,7 @@ export function LoginScreen() {
     setError("");
     try {
       const result = await send<{ submission_id: string }>("/auth/demo", {});
-      router.push("/workspace/submissions/" + result.submission_id);
+      navigateNewSession("/submissions/" + result.submission_id);
     } catch (error) {
       setError(error instanceof Error ? error.message : "Unable to start demo.");
       setBusy(false);
@@ -57,7 +60,26 @@ export function LoginScreen() {
       <main className="auth-main">
         <div className="auth-card">
           <span className="badge amber">Synthetic review environment</span>
-          {codes.length ? (
+          {!config ? (
+            <Loading error={configError} retry={retryConfig} />
+          ) : config.mode === "oidc" ? (
+            <>
+              <h1>Sign in to your agency</h1>
+              <p>
+                Use your organization’s identity provider and multi-factor authentication.
+              </p>
+              <form action="/api/v1/auth/oidc/start" method="get">
+                <button className="button primary" type="submit">
+                  Continue to secure sign-in →
+                </button>
+              </form>
+              <p>
+                <a href={config.marketing_origin + "/request-demo"}>
+                  Request agency access
+                </a>
+              </p>
+            </>
+          ) : codes.length ? (
             <>
               <h1>Save your recovery codes</h1>
               <p>
@@ -69,7 +91,7 @@ export function LoginScreen() {
                   <code key={code}>{code}</code>
                 ))}
               </div>
-              <Link className="button primary" href="/workspace">
+              <Link className="button primary" href="/dashboard">
                 Continue to workspace →
               </Link>
             </>
@@ -141,7 +163,7 @@ export function LoginScreen() {
                     secret?: string;
                   }>("/auth/" + mode, value);
                   if (result.secret) setSecret(result.secret);
-                  else router.push("/workspace");
+                  else navigateNewSession("/dashboard");
                 }}
               >
                 {mode === "register" && (

@@ -5,6 +5,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import Connection
 from sqlalchemy.pool import NullPool
 
+from app import platform_models  # noqa: F401
 from app.database.config import DatabaseSettings
 from app.database.models import Base
 from app.domain import models as domain_models  # noqa: F401

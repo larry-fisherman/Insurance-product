@@ -1,8 +1,9 @@
 "use client";
 import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
 import {
-  api,
+  downloadUrl,
   send,
   pretty,
   dateLabel,
@@ -24,6 +25,7 @@ import {
   Status,
   Empty,
 } from "./primitives";
+import { uploadDocument } from "../../lib/resumable-upload";
 import { ReviewPanel } from "./review";
 import { NewSubmission } from "./accounts";
 
@@ -37,6 +39,7 @@ function Documents({
   refresh: () => Promise<void>;
 }) {
   const [replace, setReplace] = useState("");
+  const [progress, setProgress] = useState("");
   return (
     <>
       <section className="panel padded">
@@ -52,13 +55,7 @@ function Documents({
               const file = form.get("file");
               if (!(file instanceof File) || !file.size)
                 throw new Error("Choose a PDF or XLSX document.");
-              const body = new FormData();
-              body.set("file", file);
-              if (replace) body.set("supersedes_id", replace);
-              await api("/submissions/" + data.submission.id + "/documents", {
-                method: "POST",
-                body,
-              });
+              await uploadDocument(file, data.submission.id, me, replace, setProgress);
               setReplace("");
               await refresh();
             }}
@@ -87,6 +84,7 @@ function Documents({
             )}
           </Form>
         )}
+        {progress && <p role="status">{progress}</p>}
         <small className="muted block">
           Uploaded files remain quarantined until malware scanning succeeds. The built-in
           fictional documents are signed fixtures.
@@ -127,7 +125,7 @@ function Documents({
                 {doc.scan_status === "clean" && (
                   <a
                     className="button"
-                    href={"/api/v1/documents/" + doc.id + "/content"}
+                    href={downloadUrl("/documents/" + doc.id + "/content")}
                     target="_blank"
                     rel="noreferrer"
                   >
@@ -399,7 +397,7 @@ function Candidate({
                 key={format}
                 target="_blank"
                 rel="noreferrer"
-                href={`/api/v1/packages/${p.id}/artifacts/${format}?preview=true`}
+                href={downloadUrl(`/packages/${p.id}/artifacts/${format}?preview=true`)}
               >
                 Preview {format.toUpperCase()} ↗
               </a>
@@ -441,7 +439,7 @@ function Candidate({
                     <a
                       className="button primary"
                       key={format}
-                      href={`/api/v1/packages/${p.id}/artifacts/${format}`}
+                      href={downloadUrl(`/packages/${p.id}/artifacts/${format}`)}
                     >
                       Export {format.toUpperCase()} ↓
                     </a>
@@ -803,8 +801,12 @@ function Audit({ id }: { id: string }) {
 }
 export function SubmissionWorkspace({ id, me }: { id: string; me: Me }) {
   const { data, error, refresh } = useResource<WorkspaceData>("/submissions/" + id, true);
-  const [tab, setTab] = useState("overview"),
-    [renew, setRenew] = useState(false);
+  const router = useRouter();
+  const path = usePathname();
+  const tab = path.split("/")[3] || "overview";
+  const setTab = (next: string) =>
+    router.push(`/submissions/${id}/${next}`, { scroll: false });
+  const [renew, setRenew] = useState(false);
   if (!data) return <Loading error={error} retry={refresh} />;
   if (renew)
     return (
@@ -830,7 +832,7 @@ export function SubmissionWorkspace({ id, me }: { id: string; me: Me }) {
   ).length;
   return (
     <>
-      <Link className="breadcrumb" href="/workspace/submissions">
+      <Link className="breadcrumb" href="/submissions">
         ← All submissions
       </Link>
       <Heading
@@ -965,7 +967,7 @@ export function SubmissionWorkspace({ id, me }: { id: string; me: Me }) {
               <span className="eyebrow">Account context</span>
               <h3>{data.insured.name}</h3>
               <p>{data.insured.operations ?? "Business operations not supplied."}</p>
-              <Link className="text-link" href={"/workspace/insureds/" + s.insured_id}>
+              <Link className="text-link" href={"/insureds/" + s.insured_id}>
                 View insured account ↗
               </Link>
             </section>

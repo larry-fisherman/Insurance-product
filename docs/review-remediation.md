@@ -57,3 +57,7 @@ These are **open engineering requirements or external acceptance work**, not com
 | Commercial work                 | Discovery, measured savings, approved pricing/contracts/E&O, and pilot/commercial sign-off. Billing, AMS, carrier sending, and additional lines remain outside this build.                                                                                                                    |
 
 Do not enable customer documents, staging, production, or paid-pilot claims on the basis of these corrections. Existing startup gates remain unchanged.
+
+## Web platform expansion (November 1, 2026)
+
+The approved platform plan adds separate marketing and operations applications, isolated inquiries, OIDC adapter/activation/onboarding, explicit billing access and manual limits, resumable uploads, session/agency context guards and a separate parser service. [Web platform operations](web-platform-operations.md) records implemented behavior, local deviations and remaining acceptance. Earlier open findings about live identity, production isolation, priced usage, retention and complete CGL semantics are not closed by the existence of these adapters or synthetic tests.

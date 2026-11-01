@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { FactEditor, reviewedValue, reviewedContext } from "./fact-editor";
 import {
+  downloadUrl,
   send,
   pretty,
   label,
@@ -94,7 +95,10 @@ export function Evidence({ source, data }: { source: Source; data: WorkspaceData
           <summary>View cited PDF page</summary>
           <iframe
             title={`Cited page ${loc.page} of ${doc?.filename}`}
-            src={`/api/v1/documents/${source.document_id}/content?inline=true#page=${loc.page ?? 1}&search=${encodeURIComponent(source.text.slice(0, 100))}`}
+            src={
+              downloadUrl(`/documents/${source.document_id}/content?inline=true`) +
+              `#page=${loc.page ?? 1}&search=${encodeURIComponent(source.text.slice(0, 100))}`
+            }
             style={{ width: "100%", height: 560 }}
           />
           <small>
@@ -142,7 +146,7 @@ export function Evidence({ source, data }: { source: Source; data: WorkspaceData
         </details>
       )}
       <a
-        href={"/api/v1/documents/" + source.document_id + "/content"}
+        href={downloadUrl("/documents/" + source.document_id + "/content")}
         target="_blank"
         rel="noreferrer"
       >

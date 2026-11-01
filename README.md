@@ -22,11 +22,11 @@ make full-up
 make scan-up
 ```
 
-Open **http://localhost:3000**, choose **Sign in**, then **Open a fictional example**. Each example creates a separate agency with four server-generated fictional documents and a deliberate sales-estimate discrepancy. The example session is explicitly marked as an MFA bypass for fictional review. Registered users instead enroll authenticator MFA and receive single-use recovery codes.
+Open the marketing site at **http://127.0.0.1:3001**, or the operations sign-in at **http://localhost:3000** and choose **Open a fictional example**. Use the distinct hostnames to keep app cookies off the public site. Each example creates a separate agency with four server-generated fictional documents and a deliberate sales-estimate discrepancy. The example session is explicitly marked as an MFA bypass for fictional review. Registered users instead enroll authenticator MFA and receive single-use recovery codes, then complete agency setup and explicitly assign preparer/approver permissions. See [web platform operations](docs/web-platform-operations.md) for managed identity configuration, activation, billing and the page map.
 
 The scanner may take several minutes to initialize its signature database. Its absence never releases normal uploads from quarantine. Built-in fictional fixtures are HMAC-signed by the server and can be processed while the scanner initializes.
 
-`make full-up` creates private local configuration, starts PostgreSQL, provisions restricted database roles, applies migrations, and builds the web/API/workers. Repeating it preserves documents, records, and secrets. The generated files `services/backend/.env.database` and `.env.app` are ignored by Git and created with mode 0600. Never paste them into logs or commit them.
+`make full-up` creates private local configuration, starts PostgreSQL, provisions restricted database roles, applies migrations, and builds both web applications, the API/workers, an isolated parser, and isolated public inquiry intake. Repeating it preserves documents, records, and secrets. The generated files `services/backend/.env.database` and `.env.app` are ignored by Git and created with mode 0600. Never paste them into logs or commit them.
 
 ```sh
 make full-down  # stop application services; preserve volumes

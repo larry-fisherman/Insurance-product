@@ -11,16 +11,17 @@
   },
   "scripts": {
     "dev": "npm run dev --workspace @cgl/web",
-    "build": "npm run build --workspace @cgl/web",
+    "build": "npm run build --workspaces --if-present",
     "start": "npm run start --workspace @cgl/web",
-    "lint": "npm run lint --workspace @cgl/web",
-    "typecheck": "npm run typecheck --workspace @cgl/web",
-    "test": "npm run test --workspace @cgl/web",
+    "lint": "npm run lint --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "contracts:generate": "openapi-typescript packages/contracts/openapi.json -o packages/contracts/api.d.ts",
     "smoke": "node scripts/smoke.mjs",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "dev:marketing": "npm run dev --workspace @cgl/marketing"
   },
   "devDependencies": {
     "@playwright/test": "1.64.1",

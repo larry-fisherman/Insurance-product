@@ -83,7 +83,7 @@ app-roles:
 	$(UV) run --project $(BACKEND) --frozen python -m app.bootstrap provision
 
 full-up: db-config db-up app-config app-roles db-migrate-native
-	$(FULL_COMPOSE) up -d --build redis api worker scheduler web
+	$(FULL_COMPOSE) up -d --build redis parser api worker scheduler web inquiries marketing
 
 full-down:
 	$(FULL_COMPOSE) down
@@ -113,3 +113,8 @@ verify-ocr:
 	$(FULL_COMPOSE) exec -T worker python - < scripts/verify-ocr.py
 
 .PHONY: full-up full-down scan-up full-logs app-config app-roles evaluate backup-local restore-drill browser-install check-e2e verify-ocr
+
+verify-platform:
+	python3 scripts/verify-platform-boundaries.py
+
+.PHONY: verify-platform

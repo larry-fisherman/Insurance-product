@@ -94,7 +94,7 @@ The complete contextual model and domain-approved rules remain open work; see [r
 
 ## Non-goals and release constraints
 
-No autonomous coverage decisions, rating, binding/issuance/cancellation, carrier transmission, AMS replacement, or unlicensed form reproduction. Email ingestion/sending, client portals, quote comparison, multi-line packages, billing, and additional lines require separately scoped work.
+No autonomous coverage decisions, rating, binding/issuance/cancellation, carrier transmission, AMS replacement, or unlicensed form reproduction. Email ingestion/sending, client portals, quote comparison, multi-line packages, payment processing, and additional lines require separately scoped work. The approved [web platform plan](WEB_PLATFORM_PLAN.md) adds separate marketing/operations experiences, managed identity integration, agency onboarding, and manual subscription administration; commercial pricing and payment acceptance remain open.
 
 Customer documents, paid pilots, and production use require the gates in [SECURITY.md](SECURITY.md) and [pilot readiness](pilot-readiness.md). This documentation does not authorize deployment, real data, external communications, paid provider calls, or removal of synthetic-only enforcement.
 

@@ -43,7 +43,7 @@ def test_downgrade_and_reupgrade_only_on_disposable_database(
         connection.commit()
         command.upgrade(config, "head")
         command.check(config)
-        assert connection.execute(sa.text("SELECT count(*) FROM app.role")).scalar_one() == 4
+        assert connection.execute(sa.text("SELECT count(*) FROM app.role")).scalar_one() == 5
 
 
 def test_migration_owner_and_runtime_role_are_unprivileged(connection: Connection) -> None:
@@ -97,7 +97,7 @@ def test_fixed_roles_do_not_confer_implicit_approval_or_support_access(
     bundles: dict[str, set[str]] = {}
     for row in rows:
         bundles.setdefault(row["role"], set()).add(row["permission"])
-    assert set(bundles) == {"viewer", "preparer", "approver", "tenant_admin"}
+    assert set(bundles) == {"viewer", "preparer", "approver", "tenant_admin", "billing_admin"}
     assert "packages.approve" in bundles["approver"]
     assert "exceptions.accept" in bundles["approver"]
     for role in ("viewer", "preparer", "tenant_admin"):

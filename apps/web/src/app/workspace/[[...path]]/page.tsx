@@ -1,9 +1,14 @@
-import { Suspense } from "react";
-import { WorkspaceShell } from "../../../components/workspace/shell";
-export default function Workspace() {
-  return (
-    <Suspense fallback={<div className="loading">Opening workspace…</div>}>
-      <WorkspaceShell />
-    </Suspense>
-  );
+import { redirect } from "next/navigation";
+export default async function Legacy({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ path?: string[] }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const { path = [] } = await params;
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(await searchParams))
+    if (typeof value === "string") query.set(key, value);
+  redirect("/" + (path.join("/") || "dashboard") + (query.size ? "?" + query : ""));
 }

@@ -1,6 +1,34 @@
 {
   "components": {
     "schemas": {
+      "ActivationInput": {
+        "additionalProperties": false,
+        "properties": {
+          "acknowledge": {
+            "const": true,
+            "title": "Acknowledge",
+            "type": "boolean"
+          },
+          "terms_version": {
+            "const": "preview-1",
+            "title": "Terms Version",
+            "type": "string"
+          },
+          "token": {
+            "maxLength": 100,
+            "minLength": 20,
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "acknowledge",
+          "terms_version"
+        ],
+        "title": "ActivationInput",
+        "type": "object"
+      },
       "ApprovalInput": {
         "additionalProperties": false,
         "properties": {
@@ -22,6 +50,147 @@
           "attestation"
         ],
         "title": "ApprovalInput",
+        "type": "object"
+      },
+      "BillingChange": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "plan_change",
+              "cancellation",
+              "data_return"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "note": {
+            "maxLength": 1500,
+            "minLength": 10,
+            "title": "Note",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "note"
+        ],
+        "title": "BillingChange",
+        "type": "object"
+      },
+      "BillingEdit": {
+        "additionalProperties": false,
+        "properties": {
+          "billing_email": {
+            "maxLength": 254,
+            "minLength": 3,
+            "title": "Billing Email",
+            "type": "string"
+          },
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "billing_email",
+          "expected_version"
+        ],
+        "title": "BillingEdit",
+        "type": "object"
+      },
+      "BillingResponse": {
+        "properties": {
+          "active_seats": {
+            "title": "Active Seats",
+            "type": "integer"
+          },
+          "billing_email": {
+            "title": "Billing Email",
+            "type": "string"
+          },
+          "costs": {
+            "const": "unpriced",
+            "default": "unpriced",
+            "title": "Costs",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "payment_connected": {
+            "default": false,
+            "title": "Payment Connected",
+            "type": "boolean"
+          },
+          "period_end": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period End"
+          },
+          "plan": {
+            "title": "Plan",
+            "type": "string"
+          },
+          "requests": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Requests",
+            "type": "array"
+          },
+          "row_version": {
+            "title": "Row Version",
+            "type": "integer"
+          },
+          "seat_limit": {
+            "title": "Seat Limit",
+            "type": "integer"
+          },
+          "source": {
+            "const": "manual",
+            "default": "manual",
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "submission_limit": {
+            "title": "Submission Limit",
+            "type": "integer"
+          },
+          "submissions_used": {
+            "title": "Submissions Used",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "plan",
+          "status",
+          "billing_email",
+          "row_version",
+          "seat_limit",
+          "active_seats",
+          "submission_limit",
+          "submissions_used",
+          "period_end",
+          "requests"
+        ],
+        "title": "BillingResponse",
         "type": "object"
       },
       "BlockerResponse": {
@@ -1073,11 +1242,12 @@
                 "viewer",
                 "preparer",
                 "approver",
-                "tenant_admin"
+                "tenant_admin",
+                "billing_admin"
               ],
               "type": "string"
             },
-            "maxItems": 4,
+            "maxItems": 5,
             "minItems": 1,
             "title": "Roles",
             "type": "array"
@@ -1509,11 +1679,12 @@
                 "viewer",
                 "preparer",
                 "approver",
-                "tenant_admin"
+                "tenant_admin",
+                "billing_admin"
               ],
               "type": "string"
             },
-            "maxItems": 4,
+            "maxItems": 5,
             "title": "Roles",
             "type": "array"
           },
@@ -1634,6 +1805,109 @@
           "pipeline_version"
         ],
         "title": "ObservationResponse",
+        "type": "object"
+      },
+      "OnboardingEdit": {
+        "additionalProperties": false,
+        "properties": {
+          "acknowledge": {
+            "const": true,
+            "title": "Acknowledge",
+            "type": "boolean"
+          },
+          "contact_email": {
+            "maxLength": 254,
+            "minLength": 3,
+            "title": "Contact Email",
+            "type": "string"
+          },
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "name": {
+            "maxLength": 160,
+            "minLength": 2,
+            "title": "Name",
+            "type": "string"
+          },
+          "timezone": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Timezone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "timezone",
+          "contact_email",
+          "expected_version",
+          "acknowledge"
+        ],
+        "title": "OnboardingEdit",
+        "type": "object"
+      },
+      "OnboardingResponse": {
+        "properties": {
+          "acknowledgment_version": {
+            "title": "Acknowledgment Version",
+            "type": "string"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "contact_email": {
+            "title": "Contact Email",
+            "type": "string"
+          },
+          "has_approver": {
+            "title": "Has Approver",
+            "type": "boolean"
+          },
+          "has_preparer": {
+            "title": "Has Preparer",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "row_version": {
+            "title": "Row Version",
+            "type": "integer"
+          },
+          "synthetic_only": {
+            "default": true,
+            "title": "Synthetic Only",
+            "type": "boolean"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "timezone",
+          "contact_email",
+          "row_version",
+          "completed_at",
+          "has_preparer",
+          "has_approver",
+          "acknowledgment_version"
+        ],
+        "title": "OnboardingResponse",
         "type": "object"
       },
       "PackageResponse": {
@@ -2674,6 +2948,120 @@
         "title": "TransitionInput",
         "type": "object"
       },
+      "UploadInit": {
+        "additionalProperties": false,
+        "properties": {
+          "byte_size": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 52428800.0,
+            "title": "Byte Size",
+            "type": "integer"
+          },
+          "filename": {
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "^[^/\\\\\\x00\\r\\n]+\\.(?i:pdf|xlsx)$",
+            "title": "Filename",
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Sha256",
+            "type": "string"
+          },
+          "supersedes_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Id"
+          }
+        },
+        "required": [
+          "filename",
+          "sha256",
+          "byte_size"
+        ],
+        "title": "UploadInit",
+        "type": "object"
+      },
+      "UploadResponse": {
+        "properties": {
+          "byte_size": {
+            "title": "Byte Size",
+            "type": "integer"
+          },
+          "chunk_size": {
+            "default": 1048576,
+            "title": "Chunk Size",
+            "type": "integer"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "submission_id": {
+            "format": "uuid",
+            "title": "Submission Id",
+            "type": "string"
+          },
+          "uploaded_parts": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Uploaded Parts",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "submission_id",
+          "filename",
+          "sha256",
+          "byte_size",
+          "status",
+          "expires_at",
+          "document_id",
+          "uploaded_parts"
+        ],
+        "title": "UploadResponse",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -2848,6 +3236,134 @@
         ]
       }
     },
+    "/api/v1/agency/onboarding": {
+      "get": {
+        "operationId": "onboarding_api_v1_agency_onboarding_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnboardingResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Onboarding",
+        "tags": [
+          "agency platform"
+        ]
+      },
+      "patch": {
+        "operationId": "update_onboarding_api_v1_agency_onboarding_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OnboardingEdit"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnboardingResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Onboarding",
+        "tags": [
+          "agency platform"
+        ]
+      }
+    },
+    "/api/v1/agency/usage": {
+      "get": {
+        "operationId": "usage_api_v1_agency_usage_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Usage Api V1 Agency Usage Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Usage",
+        "tags": [
+          "agency platform"
+        ]
+      }
+    },
+    "/api/v1/auth/activate": {
+      "post": {
+        "operationId": "activate_api_v1_auth_activate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActivationInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Activate Api V1 Auth Activate Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Activate",
+        "tags": [
+          "agency platform"
+        ]
+      }
+    },
     "/api/v1/auth/agency": {
       "post": {
         "operationId": "switch_agency_api_v1_auth_agency_post",
@@ -2888,6 +3404,29 @@
           }
         },
         "summary": "Switch Agency",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/api/v1/auth/config": {
+      "get": {
+        "operationId": "auth_config_api_v1_auth_config_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Auth Config Api V1 Auth Config Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Auth Config",
         "tags": [
           "identity"
         ]
@@ -3027,6 +3566,143 @@
         ]
       }
     },
+    "/api/v1/auth/oidc/callback": {
+      "get": {
+        "operationId": "callback_api_v1_auth_oidc_callback_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "code",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Code",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "State",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Callback",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/api/v1/auth/oidc/start": {
+      "get": {
+        "operationId": "start_api_v1_auth_oidc_start_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "return_to",
+            "required": false,
+            "schema": {
+              "default": "/dashboard",
+              "title": "Return To",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/api/v1/auth/reauthenticate": {
+      "post": {
+        "operationId": "reauthenticate_api_v1_auth_reauthenticate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Login"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "title": "Response Reauthenticate Api V1 Auth Reauthenticate Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reauthenticate",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
     "/api/v1/auth/recover": {
       "post": {
         "operationId": "recover_api_v1_auth_recover_post",
@@ -3110,6 +3786,175 @@
         "summary": "Register",
         "tags": [
           "identity"
+        ]
+      }
+    },
+    "/api/v1/auth/sessions": {
+      "get": {
+        "operationId": "sessions_api_v1_auth_sessions_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Sessions Api V1 Auth Sessions Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Sessions",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/api/v1/auth/sessions/revoke-others": {
+      "post": {
+        "operationId": "revoke_others_api_v1_auth_sessions_revoke_others_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "title": "Response Revoke Others Api V1 Auth Sessions Revoke Others Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Revoke Others",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/api/v1/billing": {
+      "get": {
+        "operationId": "billing_api_v1_billing_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Billing",
+        "tags": [
+          "agency platform"
+        ]
+      },
+      "patch": {
+        "operationId": "edit_billing_api_v1_billing_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BillingEdit"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Edit Billing",
+        "tags": [
+          "agency platform"
+        ]
+      }
+    },
+    "/api/v1/billing/requests": {
+      "post": {
+        "operationId": "request_billing_change_api_v1_billing_requests_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "idempotency-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BillingChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Request Billing Change Api V1 Billing Requests Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Request Billing Change",
+        "tags": [
+          "agency platform"
         ]
       }
     },
@@ -3611,6 +4456,24 @@
     "/api/v1/invitations": {
       "post": {
         "operationId": "invite_api_v1_invitations_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "idempotency-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -3689,6 +4552,53 @@
           }
         },
         "summary": "Accept Invite",
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
+    "/api/v1/invitations/{invitation_id}/revoke": {
+      "post": {
+        "operationId": "revoke_invitation_api_v1_invitations__invitation_id__revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "invitation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Invitation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "title": "Response Revoke Invitation Api V1 Invitations  Invitation Id  Revoke Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke Invitation",
         "tags": [
           "workspace"
         ]
@@ -4720,6 +5630,75 @@
         ]
       }
     },
+    "/api/v1/submissions/{submission_id}/uploads": {
+      "post": {
+        "operationId": "initialize_api_v1_submissions__submission_id__uploads_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "submission_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Submission Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "idempotency-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadInit"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Initialize",
+        "tags": [
+          "resumable intake"
+        ]
+      }
+    },
     "/api/v1/tasks": {
       "get": {
         "operationId": "task_queue_api_v1_tasks_get",
@@ -4793,6 +5772,187 @@
         "summary": "Edit Task",
         "tags": [
           "workspace"
+        ]
+      }
+    },
+    "/api/v1/uploads/{upload_id}": {
+      "get": {
+        "operationId": "upload_status_api_v1_uploads__upload_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "upload_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Upload Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Upload Status",
+        "tags": [
+          "resumable intake"
+        ]
+      }
+    },
+    "/api/v1/uploads/{upload_id}/abort": {
+      "post": {
+        "operationId": "abort_api_v1_uploads__upload_id__abort_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "upload_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Upload Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Abort",
+        "tags": [
+          "resumable intake"
+        ]
+      }
+    },
+    "/api/v1/uploads/{upload_id}/finalize": {
+      "post": {
+        "operationId": "finalize_api_v1_uploads__upload_id__finalize_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "upload_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Upload Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Finalize",
+        "tags": [
+          "resumable intake"
+        ]
+      }
+    },
+    "/api/v1/uploads/{upload_id}/parts/{number}": {
+      "put": {
+        "operationId": "put_part_api_v1_uploads__upload_id__parts__number__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "upload_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Upload Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "number",
+            "required": true,
+            "schema": {
+              "title": "Number",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Part",
+        "tags": [
+          "resumable intake"
         ]
       }
     }

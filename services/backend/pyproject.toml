@@ -27,6 +27,7 @@ dependencies = [
   "psycopg[binary]==3.3.6",
   "sqlalchemy==2.1.6",
   "uvicorn==0.54.0",
+  "pyjwt==2.15.1",
 ]
 
 [dependency-groups]

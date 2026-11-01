@@ -7,10 +7,19 @@ from uuid import UUID, uuid4
 
 import sqlalchemy as sa
 from celery import Celery
+from sqlalchemy.orm import Session
 
 from app.common import canonical_json, digest, now
 from app.config import Settings
-from app.database.models import AppUser, Membership, OutboxEvent, Tenant
+from app.database.models import (
+    AppUser,
+    Membership,
+    MembershipRole,
+    OutboxEvent,
+    Permission,
+    RolePermission,
+    Tenant,
+)
 from app.database.runtime import Database
 from app.documents import (
     MAX_PAGES,
@@ -19,8 +28,6 @@ from app.documents import (
     DocumentError,
     classify,
     local_extract,
-    parse_pdf,
-    parse_xlsx,
     processing_inventory,
     provider_extract,
     scan,
@@ -38,6 +45,8 @@ from app.domain.models import (
     Submission,
     UsageEvent,
 )
+from app.parser_client import parse_document
+from app.platform_models import Subscription
 from app.rendering import render
 from app.storage import storage
 from app.workflow import active_documents, get, refresh_issues
@@ -143,6 +152,36 @@ def process_task(tenant_id: str, user_id: str, job_id: str) -> None:
     process_job(Settings(), UUID(tenant_id), UUID(user_id), UUID(job_id))
 
 
+def validate_job_authority(session: Session, job: ProcessingJob) -> None:
+    required = "documents.write" if job.kind == "document" else "packages.generate"
+    allowed = session.scalar(
+        sa.select(Permission.key)
+        .join(RolePermission, RolePermission.permission_id == Permission.id)
+        .join(MembershipRole, MembershipRole.role_id == RolePermission.role_id)
+        .join(Membership, Membership.id == MembershipRole.membership_id)
+        .join(AppUser, AppUser.id == Membership.user_id)
+        .where(
+            Membership.tenant_id == job.tenant_id,
+            Membership.user_id == job.actor_user_id,
+            Membership.status == "active",
+            AppUser.status == "active",
+            Permission.key == required,
+        )
+        .limit(1)
+    )
+    if allowed is None:
+        raise DocumentError("JOB_PERMISSION_REVOKED")
+    subscription = session.scalar(
+        sa.select(Subscription).where(Subscription.tenant_id == job.tenant_id)
+    )
+    if (
+        subscription is None
+        or subscription.status not in {"manual_pilot", "active"}
+        or (subscription.period_end is not None and subscription.period_end <= now())
+    ):
+        raise DocumentError("SUBSCRIPTION_RESTRICTED")
+
+
 def process_job(configuration: Settings, tenant_id: UUID, user_id: UUID, job_id: UUID) -> None:
     db = Database(configuration)
     store = storage(configuration)
@@ -167,6 +206,8 @@ def process_job(configuration: Settings, tenant_id: UUID, user_id: UUID, job_id:
                 job.document_id,
                 job.package_id,
             )
+        with db.tenant(tenant_id, user_id) as session:
+            validate_job_authority(session, get(session, ProcessingJob, job_id))
         if kind == "document" and document_id:
             with db.tenant(tenant_id, user_id) as session:
                 document = get(session, DocumentVersion, document_id)
@@ -203,9 +244,7 @@ def process_job(configuration: Settings, tenant_id: UUID, user_id: UUID, job_id:
                 }
                 blocks.sort(key=lambda b: order.get(str(b.id), len(order)))
             else:
-                blocks, page_count = (
-                    parse_pdf(data) if media_type == "application/pdf" else parse_xlsx(data)
-                )
+                blocks, page_count = parse_document(data, media_type, configuration)
             document_type = classify(blocks)
             local_candidates = local_extract(blocks, document_type)
             segment_types = {
@@ -220,6 +259,7 @@ def process_job(configuration: Settings, tenant_id: UUID, user_id: UUID, job_id:
                 job = get(session, ProcessingJob, job_id, lock=True)
                 if job.status != "running" or job.attempts != claimed_attempt:
                     return
+                validate_job_authority(session, job)
                 document = get(session, DocumentVersion, document_id)
                 other_pages = (
                     session.scalar(
@@ -311,6 +351,7 @@ def process_job(configuration: Settings, tenant_id: UUID, user_id: UUID, job_id:
                 job = get(session, ProcessingJob, job_id, lock=True)
                 if job.status != "running" or job.attempts != claimed_attempt:
                     return
+                validate_job_authority(session, job)
                 document = get(session, DocumentVersion, document_id)
                 if document.processing_status != "completed":
                     document.processing_inventory = {
@@ -431,6 +472,7 @@ def process_job(configuration: Settings, tenant_id: UUID, user_id: UUID, job_id:
                 job = get(session, ProcessingJob, job_id, lock=True)
                 if job.status != "running" or job.attempts != claimed_attempt:
                     return
+                validate_job_authority(session, job)
                 package = get(session, Package, package_id, lock=True)
                 if package.status != "ready" and package.status != "approved":
                     session.add_all(artifacts)

@@ -2,7 +2,8 @@
 
 import io
 
-from app.documents import parse_pdf
+from app.config import Settings
+from app.parser_client import parse_document
 from PIL import Image, ImageDraw, ImageFont
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
@@ -22,7 +23,11 @@ output = io.BytesIO()
 page = canvas.Canvas(output, pagesize=(612, 792))
 page.drawImage(ImageReader(image), 0, 0, width=612, height=792)
 page.save()
-blocks, pages = parse_pdf(output.getvalue())
+configuration = Settings()
+assert configuration.parser_endpoint, (
+    "Full-stack OCR verification requires the isolated parser"
+)
+blocks, pages = parse_document(output.getvalue(), "application/pdf", configuration)
 assert pages == 1 and any("Fictional OCR Company LLC" in block.text for block in blocks)
 assert all(block.locator["method"] == "ocr" for block in blocks)
 print("Scanned synthetic PDF OCR passed with page/line references.")

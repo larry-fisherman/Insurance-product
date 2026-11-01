@@ -1,7 +1,7 @@
 """Authorized REST workflows. Domain writes always use tenant-scoped transactions."""
 
+import base64
 import hmac
-import secrets
 from datetime import date, timedelta
 from typing import Annotated, Any, Literal
 from urllib.parse import quote
@@ -47,7 +47,16 @@ from app.domain.models import (
     UsageEvent,
     WorkItem,
 )
-from app.identity import Authenticated, Input, Scoped, database
+from app.identity import (
+    Authenticated,
+    Input,
+    Scoped,
+    database,
+    require_recent,
+    rotate_session,
+    settings,
+)
+from app.platform import require_capacity
 from app.rendering import TEMPLATE_VERSION
 from app.storage import storage
 from app.workflow import (
@@ -159,8 +168,8 @@ class ApprovalInput(Input):
 
 class InvitationInput(Input):
     email: str = Field(min_length=3, max_length=254)
-    roles: list[Literal["viewer", "preparer", "approver", "tenant_admin"]] = Field(
-        min_length=1, max_length=4
+    roles: list[Literal["viewer", "preparer", "approver", "tenant_admin", "billing_admin"]] = Field(
+        min_length=1, max_length=5
     )
 
 
@@ -170,7 +179,9 @@ class InvitationAcceptance(Input):
 
 class MembershipEdit(Input):
     status: Literal["active", "disabled"]
-    roles: list[Literal["viewer", "preparer", "approver", "tenant_admin"]] = Field(max_length=4)
+    roles: list[Literal["viewer", "preparer", "approver", "tenant_admin", "billing_admin"]] = Field(
+        max_length=5
+    )
     expected_version: int
 
 
@@ -370,6 +381,7 @@ def create_submission(
     )
     if exists:
         return record(get(scope.session, Submission, object_id))
+    require_capacity(scope, "submissions")
     values = payload.model_dump()
     values["assigned_membership_id"] = payload.assigned_membership_id or scope.membership_id
     member = get(scope.session, Membership, values["assigned_membership_id"])
@@ -661,6 +673,7 @@ def upload(
     idempotency_key: str | None = Header(default=None),
 ) -> dict[str, Any]:
     scope.require("documents.write")
+    require_capacity(scope)
     submission = get(scope.session, Submission, submission_id, lock=True)
     data = file.file.read(MAX_FILE + 1)
     filename = file.filename or ""
@@ -837,6 +850,7 @@ def review_decisions(submission_id: UUID, payload: ReviewInput, scope: Scoped) -
 @router.post("/submissions/{submission_id}/exceptions")
 def accept_exception(submission_id: UUID, payload: ExceptionInput, scope: Scoped) -> dict[str, Any]:
     scope.require("exceptions.accept")
+    require_recent(scope.actor)
     submission = get(scope.session, Submission, submission_id, lock=True)
     ensure_open(submission)
     version_check(submission, payload.expected_version)
@@ -895,6 +909,7 @@ def generate_package(
     idempotency_key: str | None = Header(default=None),
 ) -> dict[str, Any]:
     scope.require("packages.generate")
+    require_capacity(scope)
     submission = get(scope.session, Submission, submission_id, lock=True)
     ensure_open(submission)
     object_id, exists = idempotent(
@@ -964,6 +979,7 @@ def package_detail(package_id: UUID, scope: Scoped) -> dict[str, Any]:
 @router.post("/packages/{package_id}/approvals")
 def approve_package(package_id: UUID, payload: ApprovalInput, scope: Scoped) -> dict[str, Any]:
     scope.require("packages.approve")
+    require_recent(scope.actor)
     package = get(scope.session, Package, package_id)
     submission = get(scope.session, Submission, package.submission_id, lock=True)
     ensure_open(submission)
@@ -1231,8 +1247,46 @@ def agency_settings(scope: Scoped) -> dict[str, Any]:
 
 
 @router.post("/invitations", status_code=201)
-def invite(payload: InvitationInput, request: Request, scope: Scoped) -> dict[str, Any]:
+def invite(
+    payload: InvitationInput,
+    request: Request,
+    scope: Scoped,
+    idempotency_key: str | None = Header(default=None),
+) -> dict[str, Any]:
     scope.require("members.manage")
+    require_recent(scope.actor)
+    object_id, exists = idempotent(
+        scope, "invitation.create", idempotency_key, payload.model_dump()
+    )
+    secret = scope.configuration.app_secret
+    if secret is None:
+        fail(503, "INVITATION_UNAVAILABLE", "Invitation signing is not configured.")
+    # Reconstruct the same high-entropy capability for a committed creation retry,
+    # without persisting a recoverable raw token. The DB still stores only its hash.
+    token = (
+        base64.urlsafe_b64encode(
+            hmac.digest(
+                secret.get_secret_value().encode(),
+                b"agency-invitation-v1:" + object_id.bytes,
+                "sha256",
+            )
+        )
+        .decode()
+        .rstrip("=")
+    )
+    if exists:
+        prior = get(scope.session, Invitation, object_id)
+        if not hmac.compare_digest(prior.token_hash, digest(token)):
+            fail(
+                409,
+                "INVITATION_KEY_CHANGED",
+                "Revoke this invitation and create a new link after key rotation.",
+            )
+        return {
+            "invitation": record(prior, {"token_hash"}),
+            "token": token,
+            "url": scope.configuration.public_origin + "/invite#token=" + quote(token),
+        }
     email = payload.email.strip().lower()
     from app.database.models import AppUser
 
@@ -1259,8 +1313,8 @@ def invite(payload: InvitationInput, request: Request, scope: Scoped) -> dict[st
         )
         .values(status="expired")
     )
-    token = secrets.token_urlsafe(32)
     row = Invitation(
+        id=object_id,
         tenant_id=scope.tenant_id,
         email=email,
         token_hash=digest(token),
@@ -1281,16 +1335,39 @@ def invite(payload: InvitationInput, request: Request, scope: Scoped) -> dict[st
     return {
         "invitation": record(row, {"token_hash"}),
         "token": token,
-        "url": scope.configuration.public_origin + "/invite?token=" + quote(token),
+        "url": scope.configuration.public_origin + "/invite#token=" + quote(token),
     }
+
+
+@router.post("/invitations/{invitation_id}/revoke")
+def revoke_invitation(invitation_id: UUID, scope: Scoped) -> dict[str, bool]:
+    scope.require("members.manage")
+    require_recent(scope.actor)
+    get(scope.session, Tenant, scope.tenant_id, lock=True)
+    invitation = get(scope.session, Invitation, invitation_id, lock=True)
+    if invitation.status == "revoked":
+        return {"ok": True}
+    if invitation.status != "pending":
+        fail(409, "INVITATION_NOT_PENDING", "Only pending invitations can be revoked.")
+    invitation.status = "revoked"
+    audit(
+        scope.session,
+        scope.tenant_id,
+        scope.membership_id,
+        "invitation.revoked",
+        "invitation",
+        invitation.id,
+    )
+    return {"ok": True}
 
 
 @router.post("/invitations/accept")
 def accept_invite(
-    payload: InvitationAcceptance, request: Request, actor: Authenticated
+    payload: InvitationAcceptance, request: Request, response: Response, actor: Authenticated
 ) -> dict[str, Any]:
     if not actor.mfa_verified:
         fail(403, "MFA_REQUIRED", "Complete multi-factor authentication first.")
+    require_recent(actor)
     token = payload.token
     if not 20 <= len(token) <= 100:
         fail(400, "INVITATION_INVALID", "This invitation is invalid or expired.")
@@ -1305,18 +1382,21 @@ def accept_invite(
             fail(400, "INVITATION_INVALID", "This invitation is invalid, already used, or expired.")
         from app.database.models import AuthSession
 
-        row = session.get(AuthSession, actor.session_id)
+        row = session.get(AuthSession, actor.session_id, with_for_update=True)
         assert row is not None
-        row.active_tenant_id = tenant_id
+        rotate_session(row, response, settings(request), tenant_id)
     return {"tenant_id": str(tenant_id)}
 
 
 @router.patch("/memberships/{membership_id}")
 def edit_membership(membership_id: UUID, payload: MembershipEdit, scope: Scoped) -> dict[str, Any]:
     scope.require("members.manage")
+    require_recent(scope.actor)
     # Serialize agency membership changes, including last-admin and approval races.
     get(scope.session, Tenant, scope.tenant_id, lock=True)
     member = get(scope.session, Membership, membership_id, lock=True)
+    if member.status != "active" and payload.status == "active":
+        require_capacity(scope, "seats")
     if member.row_version != payload.expected_version:
         fail(409, "STALE_MEMBERSHIP", "Membership changed. Refresh before saving.")
     admins = scope.session.scalars(

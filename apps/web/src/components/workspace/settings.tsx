@@ -1,8 +1,13 @@
 "use client";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { send, dateLabel, type Me, type Task } from "../../lib/workspace-api";
+import {
+  navigateNewSession,
+  send,
+  dateLabel,
+  type Me,
+  type Task,
+} from "../../lib/workspace-api";
 import {
   Heading,
   useResource,
@@ -33,7 +38,7 @@ interface Agency {
   }[];
   usage: { kind: string; quantity: number }[];
 }
-const roles = ["viewer", "preparer", "approver", "tenant_admin"];
+const roles = ["viewer", "preparer", "approver", "tenant_admin", "billing_admin"];
 function RoleCheckboxes({ values = ["preparer"] }: { values?: string[] }) {
   return (
     <div className="role-choices">
@@ -156,6 +161,7 @@ export function AgencySettings({ me }: { me: Me }) {
                   <th>Email</th>
                   <th>Status</th>
                   <th>Expires</th>
+                  <th>Access</th>
                 </tr>
               </thead>
               <tbody>
@@ -166,6 +172,19 @@ export function AgencySettings({ me }: { me: Me }) {
                       <Status value={i.status} />
                     </td>
                     <td>{dateLabel(i.expires_at)}</td>
+                    <td>
+                      {i.status === "pending" && (
+                        <Form
+                          submit="Revoke invitation"
+                          action={async () => {
+                            await send(`/invitations/${i.id}/revoke`, {});
+                            await refresh();
+                          }}
+                        >
+                          <span>Revoke before creating a replacement link.</span>
+                        </Form>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -243,10 +262,7 @@ export function TaskQueue() {
             r.data.items.map((t) => (
               <div className="task padded" key={t.id}>
                 <div>
-                  <Link
-                    className="row-link"
-                    href={"/workspace/submissions/" + t.submission_id}
-                  >
+                  <Link className="row-link" href={"/submissions/" + t.submission_id}>
                     {t.title}
                   </Link>
                   <p>{t.description}</p>
@@ -268,7 +284,6 @@ export function TaskQueue() {
   );
 }
 export function InvitationAccept() {
-  const router = useRouter();
   return (
     <main className="public-page">
       <Heading
@@ -278,18 +293,24 @@ export function InvitationAccept() {
       <div className="panel padded narrow">
         <Form
           submit="Accept invitation"
-          action={async () => {
-            const token = new URLSearchParams(window.location.search).get("token");
+          action={async (form) => {
+            const token =
+              new URLSearchParams(window.location.hash.slice(1)).get("token") ||
+              new URLSearchParams(window.location.search).get("token") ||
+              formText(form, "token");
             if (!token) throw new Error("The invitation link is missing its token.");
             await send("/invitations/accept", { token });
-            router.push("/workspace");
+            navigateNewSession("/dashboard");
           }}
         >
           <p>
             The invitation will add your existing user to the brokerage with the assigned
             roles.
           </p>
-          <Link href="/login">Sign in or register first ↗</Link>
+          <Field title="Invitation code (or use your invitation link)" name="token" />
+          <Link href="/login?return_to=/invite" target="_blank" rel="noopener noreferrer">
+            Sign in in another tab, then return here ↗
+          </Link>
         </Form>
       </div>
     </main>

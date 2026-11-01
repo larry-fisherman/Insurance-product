@@ -6,6 +6,8 @@ export type Entity = Pick<
   "id" | "tenant_id" | "created_at"
 >;
 export interface Me {
+  agency_context: string | null;
+  session_id: string;
   user_id: string;
   name: string;
   email: string | null;
@@ -30,6 +32,23 @@ export type ReviewState = components["schemas"]["ReviewStateResponse"];
 export type Package = components["schemas"]["PackageResponse"];
 export type Task = components["schemas"]["TaskResponse"];
 export type WorkspaceData = components["schemas"]["WorkspaceResponse"];
+
+let agencyContext: string | null = null;
+function csrfCookie() {
+  return document.cookie
+    .split("; ")
+    .find((c) => c.startsWith("__Host-app_csrf=") || c.startsWith("cgl_csrf="))
+    ?.split("=")[1];
+}
+export function navigateNewSession(path: string) {
+  // A full document navigation clears agency-specific React state and pending requests.
+  window.location.assign(new URL(path, window.location.origin).href);
+}
+export function downloadUrl(path: string): string {
+  const url = new URL("/api/v1" + path, window.location.origin);
+  if (agencyContext) url.searchParams.set("agency_context", agencyContext);
+  return url.pathname + url.search;
+}
 
 export class ApiError extends Error {
   constructor(
@@ -62,7 +81,7 @@ async function writeIdentity(path: string, options: RequestInit): Promise<string
       } else pieces.push(name, value);
     }
   } else pieces.push(String(options.body ?? ""));
-  pieces.push(document.cookie.split("; ").find((c) => c.startsWith("cgl_csrf=")) ?? "");
+  pieces.push(csrfCookie() ?? "", agencyContext ?? "");
   const hash = await crypto.subtle.digest(
     "SHA-256",
     new TextEncoder().encode(JSON.stringify(pieces)),
@@ -91,13 +110,12 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   const headers = new Headers(options.headers);
   let identity: string | undefined;
   let body = options.body;
-  if (options.body && !(options.body instanceof FormData))
+  const requestContext = agencyContext;
+  if (requestContext) headers.set("X-Agency-Context", requestContext);
+  if (typeof options.body === "string" && !headers.has("Content-Type"))
     headers.set("Content-Type", "application/json");
   if (options.method && !["GET", "HEAD"].includes(options.method)) {
-    const csrf = document.cookie
-      .split("; ")
-      .find((c) => c.startsWith("cgl_csrf="))
-      ?.split("=")[1];
+    const csrf = csrfCookie();
     if (csrf) headers.set("X-CSRF-Token", decodeURIComponent(csrf));
     if (!headers.has("Idempotency-Key")) {
       identity = await writeIdentity(path, options);
@@ -155,6 +173,22 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
         0,
         "UNCERTAIN_RESPONSE",
         "The response was interrupted. Retry to recover the same operation.",
+      );
+    }
+    if (path === "/me") {
+      const context = (result as Me).agency_context;
+      if (agencyContext && agencyContext !== context)
+        throw new ApiError(
+          409,
+          "AGENCY_CONTEXT_CHANGED",
+          "Your agency changed. Reload this page to continue.",
+        );
+      agencyContext = context;
+    } else if (requestContext !== agencyContext) {
+      throw new ApiError(
+        409,
+        "AGENCY_CONTEXT_CHANGED",
+        "Your agency changed. Reload this page to continue.",
       );
     }
     if (identity) {

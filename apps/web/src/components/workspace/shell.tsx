@@ -1,8 +1,8 @@
 "use client";
 import Link from "next/link";
 import { useState } from "react";
-import { usePathname, useSearchParams, useRouter } from "next/navigation";
-import { send, type Me } from "../../lib/workspace-api";
+import { usePathname, useSearchParams } from "next/navigation";
+import { navigateNewSession, send, type Me } from "../../lib/workspace-api";
 import { useResource, Loading, Notice } from "./primitives";
 import { AgencySettings, TaskQueue } from "./settings";
 import {
@@ -12,10 +12,10 @@ import {
   SubmissionList,
   NewSubmission,
 } from "./accounts";
+import { AgencySetup, Billing, Usage, Profile, AgencyChoice } from "./platform";
 import { SubmissionWorkspace } from "./submission";
 
 export function WorkspaceShell() {
-  const router = useRouter();
   const path = usePathname(),
     params = useSearchParams();
   const { data: me, error, refresh } = useResource<Me>("/me");
@@ -34,17 +34,33 @@ export function WorkspaceShell() {
       </div>
     );
   const base = path.split("/").filter(Boolean);
-  const section = base[1] ?? "dashboard",
-    id = base[2];
+  const section = base[0] ?? "dashboard",
+    id = base[1];
   const nav = [
     ["dashboard", "Overview", "◫", "agency.read"],
     ["insureds", "Insured accounts", "▦", "insureds.read"],
     ["submissions", "Submissions", "▤", "submissions.read"],
     ["tasks", "Follow-ups", "☑", "reviews.read"],
-    ["settings", "Settings & team", "⚙", "members.read"],
+    ["settings/team", "Settings & team", "⚙", "members.read"],
+    ["onboarding", "Agency setup", "◇", "agency.manage"],
+    ["settings/billing", "Subscription", "▤", "billing.read"],
+    ["settings/usage", "Usage", "◫", "usage.read"],
+    ["profile/security", "Profile & security", "◎", "agency.read"],
   ];
   let content;
-  if (section === "dashboard") content = <Dashboard me={me} />;
+  if (section === "profile") content = <Profile me={me} />;
+  else if (!me.tenant_id || section === "agency-select" || section === "access-pending")
+    content = <AgencyChoice me={me} />;
+  else if (section === "onboarding" || (section === "settings" && id === "agency"))
+    content = <AgencySetup me={me} />;
+  else if (section === "settings" && id === "billing") content = <Billing />;
+  else if (section === "settings" && id === "usage") content = <Usage />;
+  else if (section === "dashboard")
+    content = me.permissions.includes("submissions.read") ? (
+      <Dashboard me={me} />
+    ) : (
+      <AgencySetup me={me} />
+    );
   else if (section === "insureds")
     content = id ? (
       <InsuredDetail key={id} id={id} me={me} />
@@ -69,7 +85,7 @@ export function WorkspaceShell() {
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <Link href="/workspace" className="brand">
+        <Link href="/dashboard" className="brand">
           <span className="brand-symbol">▱</span>
           <span>
             CGL<span className="brand-light"> Workspace</span>
@@ -84,8 +100,7 @@ export function WorkspaceShell() {
               onChange={async (e) => {
                 try {
                   await send("/auth/agency", { tenant_id: e.target.value });
-                  await refresh();
-                  router.push("/workspace");
+                  navigateNewSession("/dashboard");
                 } catch (error) {
                   setSignoutError(
                     error instanceof Error ? error.message : "Unable to switch agency.",
@@ -110,7 +125,7 @@ export function WorkspaceShell() {
               <Link
                 key={key}
                 className={section === key ? "active" : ""}
-                href={"/workspace/" + (key === "dashboard" ? "" : key)}
+                href={"/" + key}
               >
                 <span aria-hidden="true">{icon}</span>
                 {title}
@@ -127,7 +142,7 @@ export function WorkspaceShell() {
               Every decision has a record.
             </p>
           </div>
-          <Link href="/security">Security & data practices ↗</Link>
+          <Link href="/profile/security">Security & data practices ↗</Link>
           <div className="user-card">
             <span className="avatar">
               {me.name
@@ -150,7 +165,7 @@ export function WorkspaceShell() {
               onClick={async () => {
                 try {
                   await send("/auth/logout", {});
-                  router.push("/login");
+                  navigateNewSession("/login");
                 } catch (error) {
                   setSignoutError(
                     error instanceof Error ? error.message : "Unable to sign out.",

@@ -1,4 +1,9 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
+
+async function agencyGet(page: Page, path: string) {
+  const me = await (await page.request.get("/api/v1/me")).json();
+  return page.request.get(path, { headers: { "X-Agency-Context": me.agency_context } });
+}
 
 test.beforeAll(async ({ request }) => {
   await expect
@@ -22,7 +27,7 @@ test("fictional brokerage reviews evidence, approves exact files, and exports", 
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto("/login");
   await page.getByRole("button", { name: "Open a fictional example" }).click();
-  await expect(page).toHaveURL(/workspace\/submissions\/[0-9a-f-]+/, { timeout: 90_000 });
+  await expect(page).toHaveURL(/submissions\/[0-9a-f-]+/, { timeout: 90_000 });
   await expect(
     page.getByRole("heading", {
       name: "Lakeshore Design Services LLC",
@@ -34,7 +39,7 @@ test("fictional brokerage reviews evidence, approves exact files, and exports", 
   await expect
     .poll(
       async () => {
-        const response = await page.request.get("/api/v1/submissions/" + submissionId);
+        const response = await agencyGet(page, "/api/v1/submissions/" + submissionId);
         if (!response.ok()) return false;
         const data = await response.json();
         return (
@@ -61,7 +66,9 @@ test("fictional brokerage reviews evidence, approves exact files, and exports", 
     .locator("iframe[title^='Cited page']")
     .first()
     .getAttribute("src");
-  expect(citedPdf).toContain("inline=true#page=");
+  expect(citedPdf).toContain("inline=true");
+  expect(citedPdf).toContain("agency_context=");
+  expect(citedPdf).toContain("#page=");
   const citedResponse = await page.request.get(citedPdf!.split("#")[0]);
   expect(citedResponse.headers()["content-disposition"]).toContain("inline");
   await page.getByText("View cited spreadsheet cells", { exact: true }).first().click();
@@ -115,10 +122,10 @@ test("fictional brokerage reviews evidence, approves exact files, and exports", 
 test("mobile navigation and fictional-mode boundaries are visible", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: /From scattered/ })).toBeVisible();
-  await page.getByRole("link", { name: "Security", exact: true }).click();
+  await expect(page).toHaveURL(/\/login$/);
+  await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
   await expect(
-    page.getByText("This is a local, synthetic-data review build.", { exact: false }),
+    page.getByText("Synthetic review environment", { exact: true }),
   ).toBeVisible();
   expect(
     await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
@@ -134,13 +141,13 @@ test("normal PDF upload is scanned and processed without a synthetic signature",
   );
   await page.goto("/login");
   await page.getByRole("button", { name: "Open a fictional example" }).click();
-  await expect(page).toHaveURL(/workspace\/submissions\/[0-9a-f-]+/, { timeout: 90_000 });
+  await expect(page).toHaveURL(/submissions\/[0-9a-f-]+/, { timeout: 90_000 });
   const submissionId = page.url().split("/").at(-1);
   let originalId = "";
   await expect
     .poll(
       async () => {
-        const response = await page.request.get("/api/v1/submissions/" + submissionId);
+        const response = await agencyGet(page, "/api/v1/submissions/" + submissionId);
         if (!response.ok()) return false;
         const data = await response.json();
         originalId = data.documents.find(
@@ -151,7 +158,7 @@ test("normal PDF upload is scanned and processed without a synthetic signature",
       { timeout: 90_000 },
     )
     .toBe(true);
-  const original = await page.request.get("/api/v1/documents/" + originalId + "/content");
+  const original = await agencyGet(page, "/api/v1/documents/" + originalId + "/content");
   expect(original.status()).toBe(200);
   await page.getByRole("button", { name: "Documents", exact: true }).click();
   await page.locator("input[type=file]").setInputFiles({
@@ -163,7 +170,7 @@ test("normal PDF upload is scanned and processed without a synthetic signature",
   await expect
     .poll(
       async () => {
-        const response = await page.request.get("/api/v1/submissions/" + submissionId);
+        const response = await agencyGet(page, "/api/v1/submissions/" + submissionId);
         const data = await response.json();
         const doc = data.documents.find(
           (d: { filename: string }) =>
@@ -174,4 +181,27 @@ test("normal PDF upload is scanned and processed without a synthetic signature",
       { timeout: 90_000 },
     )
     .toBe(true);
+});
+
+test("public marketing saves a fictional inquiry and cannot proxy operations", async ({
+  page,
+}) => {
+  const origin = process.env.CGL_MARKETING_ORIGIN ?? "http://127.0.0.1:3001";
+  await page.goto(origin);
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("Bring clarity");
+  expect((await page.request.get(origin + "/api/v1/me")).status()).toBe(404);
+  expect((await page.request.get(origin + "/submissions")).status()).toBe(404);
+  await page.goto(origin + "/request-demo");
+  await page.getByLabel("Your name").fill("Fictional Broker");
+  await page.getByLabel("Work email").fill("browser-test@example.invalid");
+  await page.getByLabel("Agency name").fill("Fictional Browser Agency");
+  await page.getByRole("checkbox").check();
+  await page.getByRole("button", { name: "Request a demo" }).click();
+  await expect(page).toHaveURL(origin + "/thank-you");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(origin);
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+  ).toBeTruthy();
+  await page.screenshot({ path: ".artifacts/marketing-mobile.png", fullPage: true });
 });

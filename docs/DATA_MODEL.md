@@ -1,6 +1,6 @@
 # Data model
 
-Updated: October 30, 2026. This document describes actual persistence and the intended separation between shared workflow records and line-specific insurance facts. SQLAlchemy models and Alembic migrations are authoritative for physical schema; this document does not create tables.
+Updated: November 1, 2026. This document describes actual persistence and the intended separation between shared workflow records and line-specific insurance facts. SQLAlchemy models and Alembic migrations are authoritative for physical schema; this document does not create tables.
 
 ## Ownership and relationships
 
@@ -33,10 +33,10 @@ Identity/tenancy metadata lives in `services/backend/app/database/models.py`; wo
 
 | Actual table(s)                                            | Purpose and important fields                                                                                                                                             |
 | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `tenant`, `app_user`, `membership`                         | Agency/user identity, membership status, versions; issuer/subject fields do not imply working OIDC                                                                       |
+| `tenant`, `app_user`, `membership`                         | Agency/user identity, membership status, versions; issuer/subject bind the OIDC adapter without automatic email linking; verified-email status supports activation       |
 | `role`, `permission`, `role_permission`, `membership_role` | Permission bundles, tenant-bound assignments and attribution                                                                                                             |
 | `invitation`, `auth_session`                               | Expiring hashed invitations, session secret/CSRF hashes, MFA state, active agency and revocation                                                                         |
-| `credential`, `recovery_code`, `oauth_state`               | Local password/TOTP/recovery data and reserved OAuth state; no connected managed identity adapter                                                                        |
+| `credential`, `recovery_code`, `oauth_state`               | Local password/TOTP/recovery data and single-use browser-bound OIDC state, nonce, PKCE verifier and return path; live provider acceptance pending                        |
 | `insured_account`                                          | Tenant account display/profile information, external reference, status and row version; account metadata is not automatically reviewed named-insured evidence            |
 | `submission`                                               | Account, `line`, kind, intended/loss-required periods, owner/due date, status, `input_version`, `row_version`, requirements and unverified renewal candidates            |
 | `document_version`                                         | Submission, replacement link, file metadata, SHA-256, private object key/version, scan/processing status, classification, exclusion attribution and processing inventory |
@@ -94,3 +94,15 @@ Monetary values use exact decimal strings/Decimal, never binary floating-point. 
 Evolve through additive, reviewed Alembic migrations and explicit domain/schema versions. Preserve readable historical snapshots, source locators, and old approvals. Reprocessing appends new results and reopens affected review; it never retroactively blesses legacy observations. The review-remediation migrations through `0006_workspace` mark old observations unvalidated and invalidate affected inputs without rewriting immutable facts.
 
 Before enabling a second line, bind its versions explicitly across submission, extraction, canonical payload, rules/requirements, and rendering. Add typed domain projections only for demonstrated needs, referencing their canonical revision and preserving provenance. Shared tenancy, source identity, and approval records must survive any such projection change.
+
+## Agency platform records (migration 0007)
+
+- `agency_profile`: one per tenant, contact details, versioned onboarding acknowledgments and completion time.
+- `agency_subscription`: one per tenant, manual status/plan, billing contact, seat/submission limits, optional expiry and optimistic version. No payment credentials or fabricated invoice state.
+- `billing_request`: append-only tenant requests attributed to a membership.
+- `agency_activation`: operator-issued token hash, verified email binding, expiry, consumption/request hash and resulting tenant. Restricted definer functions perform activation; runtime cannot read activation secrets.
+- `upload_session`, `upload_part`: tenant/submission/initiator binding, expected complete-file hash and byte count, expiry, immutable object references, part hashes and finalized document linkage. Expired/aborted parts currently remain stored.
+- `auth_session`: context version, authentication time and last activity support session rotation, idle expiry and recent-authentication checks. Context references bind tenant plus session plus version.
+- `app_user.email_verified` and the expanded `oauth_state` support server-side managed identity. They do not prove live provider lifecycle acceptance.
+
+The `billing_admin` role grants billing/usage/agency metadata access without insured/document/review permission. New owners receive it plus `tenant_admin`; CGL preparer/approver roles remain explicit. The separate public inquiry database is outside the operations metadata and RLS schema. See [ADR 0004](decisions/0004-web-platform.md).

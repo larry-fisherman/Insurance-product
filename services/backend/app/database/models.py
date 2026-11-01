@@ -56,6 +56,7 @@ class AppUser(Base, IdentityMixin):
     display_name: Mapped[str] = mapped_column(sa.Text)
     status: Mapped[str] = mapped_column(sa.Text, server_default="active")
     email: Mapped[str | None] = mapped_column(sa.Text)
+    email_verified: Mapped[bool] = mapped_column(server_default=sa.false())
 
 
 class Membership(Base, IdentityMixin):
@@ -196,6 +197,13 @@ class AuthSession(Base, IdentityMixin):
     auth_method: Mapped[str] = mapped_column(sa.Text, server_default="pending")
     mfa_verified: Mapped[bool] = mapped_column(server_default=sa.false())
     active_tenant_id: Mapped[UUID | None] = mapped_column(sa.ForeignKey("app.tenant.id"))
+    context_version: Mapped[int] = mapped_column(server_default=sa.text("1"))
+    authenticated_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), server_default=sa.func.now()
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), server_default=sa.func.now()
+    )
 
 
 class AuditEvent(Base, IdentityMixin):

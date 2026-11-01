@@ -10,7 +10,7 @@ import secrets
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Annotated, Any
 from uuid import UUID, uuid4
 
@@ -92,6 +92,8 @@ class Actor:
     permissions: frozenset[str]
     mfa_verified: bool
     auth_method: str
+    context_version: int = 1
+    authenticated_at: datetime | None = None
 
 
 def database(request: Request) -> Database:
@@ -156,20 +158,23 @@ def set_session(
     session.flush()
     secure = configuration.public_origin.startswith("https://")
     response.set_cookie(
-        "cgl_session",
+        configuration.session_cookie,
         token,
         httponly=True,
         secure=secure,
         samesite="lax",
         max_age=28800,
-        path="/api/v1",
+        path="/",
     )
-    response.set_cookie("cgl_csrf", csrf, secure=secure, samesite="lax", max_age=28800, path="/")
+    response.delete_cookie("cgl_session", path="/api/v1")
+    response.set_cookie(
+        configuration.csrf_cookie, csrf, secure=secure, samesite="lax", max_age=28800, path="/"
+    )
     return row
 
 
 def current_actor(request: Request) -> Actor:
-    token = request.cookies.get("cgl_session", "")
+    token = request.cookies.get(settings(request).session_cookie, "")
     if not token or len(token) > 256:
         fail(401, "SIGN_IN_REQUIRED", "Sign in to continue.")
     with database(request).identity() as session:
@@ -178,11 +183,14 @@ def current_actor(request: Request) -> Actor:
                 AuthSession.secret_hash == digest(token),
                 AuthSession.revoked_at.is_(None),
                 AuthSession.expires_at > now(),
+                AuthSession.last_seen_at
+                > now() - timedelta(minutes=settings(request).session_idle_minutes),
             )
         )
         if row is None:
             fail(401, "SESSION_EXPIRED", "Your session has expired. Please sign in.")
         assert row is not None
+        row.last_seen_at = now()
         user = session.get(AppUser, row.user_id)
         if user is None or user.status != "active":
             fail(401, "SIGN_IN_REQUIRED", "Sign in to continue.")
@@ -190,7 +198,7 @@ def current_actor(request: Request) -> Actor:
         if request.method not in {"GET", "HEAD", "OPTIONS"}:
             check_origin(request)
             csrf = request.headers.get("x-csrf-token", "")
-            cookie = request.cookies.get("cgl_csrf", "")
+            cookie = request.cookies.get(settings(request).csrf_cookie, "")
             if not (
                 csrf
                 and hmac.compare_digest(csrf, cookie)
@@ -244,6 +252,8 @@ def current_actor(request: Request) -> Actor:
             permissions,
             row.mfa_verified,
             row.auth_method,
+            row.context_version,
+            row.authenticated_at,
         )
 
 
@@ -266,6 +276,26 @@ class Scope:
     def require(self, permission: str) -> None:
         if permission not in self.actor.permissions:
             fail(403, "PERMISSION_REQUIRED", "Your role does not permit this action.")
+        if self.actor.auth_method != "synthetic-demo-bypass" and permission in {
+            "insureds.write",
+            "submissions.write",
+            "documents.write",
+            "reviews.write",
+            "packages.generate",
+        }:
+            from app.platform_models import AgencyProfile
+
+            completed = self.session.scalar(
+                sa.select(AgencyProfile.onboarding_completed_at).where(
+                    AgencyProfile.tenant_id == self.tenant_id
+                )
+            )
+            if completed is None:
+                fail(
+                    403,
+                    "ONBOARDING_REQUIRED",
+                    "An agency administrator must complete Agency setup before starting insurance operations.",
+                )
 
 
 def get_scope(request: Request, actor: Annotated[Actor, Depends(current_actor)]) -> Iterator[Scope]:
@@ -274,6 +304,15 @@ def get_scope(request: Request, actor: Annotated[Actor, Depends(current_actor)])
     if actor.tenant_id is None or actor.membership_id is None:
         fail(403, "AGENCY_REQUIRED", "Select an active agency to continue.")
     assert actor.tenant_id is not None
+    expected = request.headers.get("x-agency-context") or (
+        request.query_params.get("agency_context") if request.method in {"GET", "HEAD"} else None
+    )
+    if expected != f"{actor.tenant_id}:{actor.session_id}:{actor.context_version}":
+        fail(
+            409,
+            "AGENCY_CONTEXT_CHANGED",
+            "Your agency context changed. Reload this page before continuing.",
+        )
     with database(request).tenant(actor.tenant_id, actor.user_id) as session:
         yield Scope(session, actor, settings(request))
 
@@ -299,6 +338,7 @@ def verify_totp(credential: Credential, code: str, configuration: Settings) -> b
 
 @router.post("/auth/register")
 def register(payload: Registration, request: Request, response: Response) -> dict[str, Any]:
+    require_local(request)
     check_origin(request)
     throttle(request, "register", 4)
     secret = pyotp.random_base32()
@@ -324,7 +364,7 @@ def register(payload: Registration, request: Request, response: Response) -> dic
             )
         )
         tenant_id = session.scalar(
-            sa.text("SELECT app.bootstrap_agency(:user, :name)"),
+            sa.text("SELECT app.create_agency_owner(:user, :name)"),
             {"user": user.id, "name": payload.agency},
         )
         set_session(session, response, settings(request), user.id, tenant_id, verified=False)
@@ -337,6 +377,7 @@ def register(payload: Registration, request: Request, response: Response) -> dic
 
 @router.post("/auth/login")
 def login(payload: Login, request: Request, response: Response) -> dict[str, Any]:
+    require_local(request)
     check_origin(request)
     throttle(request, "login", 8)
     with database(request).identity() as session:
@@ -400,7 +441,10 @@ def login(payload: Login, request: Request, response: Response) -> dict[str, Any
 
 
 @router.post("/auth/mfa/confirm")
-def confirm_mfa(payload: CodeInput, request: Request, actor: Authenticated) -> dict[str, Any]:
+def confirm_mfa(
+    payload: CodeInput, request: Request, response: Response, actor: Authenticated
+) -> dict[str, Any]:
+    require_local(request)
     throttle(request, "mfa", 8)
     with database(request).identity() as session:
         credential = session.scalar(
@@ -414,9 +458,11 @@ def confirm_mfa(payload: CodeInput, request: Request, actor: Authenticated) -> d
             fail(400, "MFA_INVALID", "Enter a new authenticator code.")
         assert credential is not None
         credential.mfa_enrolled = True
-        row = session.get(AuthSession, actor.session_id)
+        row = session.get(AuthSession, actor.session_id, with_for_update=True)
         assert row is not None
         row.mfa_verified = True
+        row.authenticated_at = now()
+        rotate_session(row, response, settings(request), row.active_tenant_id)
         codes = [secrets.token_hex(12) for _ in range(10)]
         session.add_all(
             [RecoveryCode(user_id=actor.user_id, code_hash=digest(code)) for code in codes]
@@ -426,6 +472,7 @@ def confirm_mfa(payload: CodeInput, request: Request, actor: Authenticated) -> d
 
 @router.post("/auth/recover")
 def recover(payload: RecoveryInput, request: Request, response: Response) -> dict[str, Any]:
+    require_local(request)
     check_origin(request)
     throttle(request, "recovery", 5)
     secret = pyotp.random_base32()
@@ -506,15 +553,24 @@ def me(request: Request, actor: Authenticated) -> dict[str, Any]:
         "mfa_verified": actor.mfa_verified,
         "auth_method": actor.auth_method,
         "synthetic_only": True,
-        "csrf_token": request.cookies.get("cgl_csrf", ""),
+        "csrf_token": request.cookies.get(settings(request).csrf_cookie, ""),
+        "agency_context": f"{actor.tenant_id}:{actor.session_id}:{actor.context_version}"
+        if actor.tenant_id
+        else None,
+        "session_id": str(actor.session_id),
     }
 
 
 @router.post("/auth/agency")
-def switch_agency(payload: TenantChoice, request: Request, actor: Authenticated) -> dict[str, bool]:
+def switch_agency(
+    payload: TenantChoice, request: Request, response: Response, actor: Authenticated
+) -> dict[str, bool]:
     with database(request).identity() as session:
         member = session.scalar(
-            sa.select(Membership).where(
+            sa.select(Membership)
+            .join(Tenant, Tenant.id == Membership.tenant_id)
+            .where(
+                Tenant.status == "active",
                 Membership.user_id == actor.user_id,
                 Membership.tenant_id == payload.tenant_id,
                 Membership.status == "active",
@@ -522,9 +578,9 @@ def switch_agency(payload: TenantChoice, request: Request, actor: Authenticated)
         )
         if member is None:
             fail(404, "NOT_FOUND", "Agency not found.")
-        row = session.get(AuthSession, actor.session_id)
+        row = session.get(AuthSession, actor.session_id, with_for_update=True)
         assert row is not None
-        row.active_tenant_id = payload.tenant_id
+        rotate_session(row, response, settings(request), payload.tenant_id)
     return {"ok": True}
 
 
@@ -536,6 +592,125 @@ def logout(request: Request, response: Response, actor: Authenticated) -> dict[s
             .where(AuthSession.id == actor.session_id)
             .values(revoked_at=now())
         )
+    response.delete_cookie(settings(request).session_cookie, path="/")
     response.delete_cookie("cgl_session", path="/api/v1")
-    response.delete_cookie("cgl_csrf", path="/")
+    response.delete_cookie(settings(request).csrf_cookie, path="/")
+    return {"ok": True}
+
+
+def require_local(request: Request) -> None:
+    if settings(request).auth_mode != "local":
+        fail(404, "LOCAL_AUTH_DISABLED", "Use managed sign-in.")
+
+
+def rotate_session(
+    row: AuthSession, response: Response, configuration: Settings, tenant_id: UUID | None
+) -> None:
+    token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+    row.secret_hash, row.csrf_hash = digest(token), digest(csrf)
+    row.active_tenant_id = tenant_id
+    row.context_version += 1
+    secure = configuration.public_origin.startswith("https://")
+    response.set_cookie(
+        configuration.session_cookie,
+        token,
+        httponly=True,
+        secure=secure,
+        samesite="lax",
+        max_age=max(1, int((row.expires_at - now()).total_seconds())),
+        path="/",
+    )
+    response.set_cookie(
+        configuration.csrf_cookie,
+        csrf,
+        secure=secure,
+        samesite="lax",
+        max_age=max(1, int((row.expires_at - now()).total_seconds())),
+        path="/",
+    )
+
+
+def require_recent(actor: Actor) -> None:
+    if actor.auth_method == "synthetic-demo-bypass":
+        return
+    if actor.authenticated_at is None or actor.authenticated_at < now() - timedelta(minutes=10):
+        fail(
+            403,
+            "REAUTHENTICATION_REQUIRED",
+            "Confirm your identity from Profile → Security, then review and retry this action.",
+        )
+
+
+@router.get("/auth/config")
+def auth_config(request: Request) -> dict[str, Any]:
+    return {
+        "mode": settings(request).auth_mode,
+        "synthetic_only": True,
+        "marketing_origin": settings(request).marketing_origin,
+    }
+
+
+@router.get("/auth/sessions")
+def sessions(request: Request, actor: Authenticated) -> dict[str, Any]:
+    with database(request).identity() as session:
+        rows = session.scalars(
+            sa.select(AuthSession)
+            .where(
+                AuthSession.user_id == actor.user_id,
+                AuthSession.revoked_at.is_(None),
+                AuthSession.expires_at > now(),
+            )
+            .order_by(AuthSession.created_at.desc())
+            .limit(100)
+        )
+        return {
+            "items": [
+                {
+                    "id": str(row.id),
+                    "current": row.id == actor.session_id,
+                    "created_at": row.created_at.isoformat(),
+                    "last_seen_at": row.last_seen_at.isoformat(),
+                    "expires_at": row.expires_at.isoformat(),
+                    "method": row.auth_method,
+                }
+                for row in rows
+            ]
+        }
+
+
+@router.post("/auth/sessions/revoke-others")
+def revoke_others(request: Request, actor: Authenticated) -> dict[str, bool]:
+    require_recent(actor)
+    with database(request).identity() as session:
+        session.execute(
+            sa.update(AuthSession)
+            .where(
+                AuthSession.user_id == actor.user_id,
+                AuthSession.id != actor.session_id,
+                AuthSession.revoked_at.is_(None),
+            )
+            .values(revoked_at=now())
+        )
+    return {"ok": True}
+
+
+@router.post("/auth/reauthenticate")
+def reauthenticate(payload: Login, request: Request, actor: Authenticated) -> dict[str, bool]:
+    require_local(request)
+    throttle(request, "reauthenticate", 8)
+    with database(request).identity() as session:
+        credential = session.get(Credential, actor.user_id, with_for_update=True)
+        try:
+            hasher.verify(credential.password_hash if credential else dummy_hash, payload.password)
+        except VerificationError:
+            fail(401, "SIGN_IN_FAILED", "Identity confirmation failed.")
+        if (
+            credential is None
+            or credential.email != payload.email.lower()
+            or not verify_totp(credential, payload.code, settings(request))
+        ):
+            fail(401, "SIGN_IN_FAILED", "Identity confirmation failed.")
+        row = session.get(AuthSession, actor.session_id)
+        assert row is not None
+        row.authenticated_at = now()
     return {"ok": True}

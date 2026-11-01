@@ -113,3 +113,24 @@ it("shares an in-flight write result with concurrent callers", async () => {
   ]);
   expect(fetcher).toHaveBeenCalledOnce();
 });
+
+it("binds requests and downloads to this tab’s agency and rejects a changed session", async () => {
+  let context = "agency-a:session-a:1";
+  const fetcher = vi.fn(async (url: unknown, init: RequestInit) => {
+    if (url === "/api/v1/me")
+      return { ok: true, json: async () => ({ agency_context: context }) };
+    expect(new Headers(init.headers).get("X-Agency-Context")).toBe(
+      "agency-a:session-a:1",
+    );
+    return { ok: true, json: async () => ({ items: [] }) };
+  });
+  vi.stubGlobal("fetch", fetcher);
+  const { api, downloadUrl } = await import("../src/lib/workspace-api");
+  await api("/me");
+  await api("/insureds");
+  expect(downloadUrl("/documents/test/content")).toContain(
+    "agency_context=agency-a%3Asession-a%3A1",
+  );
+  context = "agency-a:session-b:1";
+  await expect(api("/me")).rejects.toMatchObject({ code: "AGENCY_CONTEXT_CHANGED" });
+});

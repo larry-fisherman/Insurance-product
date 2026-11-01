@@ -52,6 +52,9 @@ class OauthState(Base):
     verifier: Mapped[str] = mapped_column(sa.Text)
     nonce: Mapped[str] = mapped_column(sa.Text)
     expires_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
+    browser_hash: Mapped[str] = mapped_column(sa.String(64), server_default="")
+    return_path: Mapped[str] = mapped_column(sa.Text, server_default="/dashboard")
+    consumed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
 
 
 class InsuredAccount(Base, TenantRecord):

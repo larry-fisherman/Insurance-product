@@ -1,6 +1,6 @@
 # Roadmap
 
-Updated: October 30, 2026. Deliver an insurance document intelligence and workflow platform through a CGL-first implementation. Reuse shared ingestion/evidence/review infrastructure; validate each line's insurance semantics separately.
+Updated: November 1, 2026. Deliver an insurance document intelligence and workflow platform through a CGL-first implementation. Reuse shared ingestion/evidence/review infrastructure; validate each line's insurance semantics separately.
 
 This is a delivery sequence with acceptance gates, not a claim of completed phases or a commitment to dates. [plan.md](../plan.md) retains the original detailed tickets and quality hypotheses. [review remediation](review-remediation.md) records current fixes and open requirements; [roadmap status](roadmap-status.md) maps earlier phases to the review build. Existing CGL acceptance requirements remain binding.
 
@@ -8,7 +8,7 @@ This is a delivery sequence with acceptance gates, not a claim of completed phas
 
 Implemented for local synthetic review: tenant/accounts/submissions, local password/TOTP roles, private document intake and bounded OCR/parsing, observations and citations, deterministic CGL findings, human review and attestations, exceptions/tasks, immutable revisions, original packages, approval-bound export, outbox/jobs, and local verification/recovery tooling.
 
-Not established: complete functional MVP acceptance, representative insurance accuracy, managed identity, independently isolated parsing, production security/operations, actual provider costs, customer authorization, paid pilot, billing, or support for another insurance line. The general domain-module contract is proposed, while CGL dependencies remain in shared code paths.
+Not established: complete functional MVP acceptance, representative insurance accuracy, live managed-identity acceptance, independently assessed parser isolation, production security/operations, actual provider costs, customer authorization, paid pilot, payment processing, or support for another insurance line. The general domain-module contract is proposed, while CGL dependencies remain in shared code paths.
 
 ## Delivery sequence
 
@@ -54,3 +54,7 @@ AMS/email/carrier integrations, client portals, e-signature, quote comparison, m
 ## Evidence and documentation maintenance
 
 For each material change, record affected requirements, shared/domain ownership, migrations and version changes, relevant verification, remaining limitations, and whether a release gate changed. Keep these five docs aligned with implementation and ADRs; keep historical verification reports dated. Existing generated regression success must not be relabeled as independent held-out accuracy or customer savings.
+
+## Approved web-platform implementation
+
+The local implementation now includes independent marketing/operations builds, isolated public intake, an OIDC adapter and controlled activation, onboarding/team management, billing-admin/manual entitlements, resumable intake, session context binding and a credential-free parser container. [Implementation status](web-platform-operations.md) distinguishes these implemented pieces from live provider/payment, retention, hosting and CGL acceptance still required. Existing delivery gates are unchanged.

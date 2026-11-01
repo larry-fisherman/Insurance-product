@@ -38,7 +38,7 @@ export function SubmissionTable({ items }: { items: Submission[] }) {
           {items.map((s) => (
             <tr key={s.id}>
               <td>
-                <Link className="row-link" href={"/workspace/submissions/" + s.id}>
+                <Link className="row-link" href={"/submissions/" + s.id}>
                   {s.insured_name ?? s.title}
                 </Link>
                 {s.insured_name && <span className="muted block">{s.title}</span>}
@@ -52,10 +52,7 @@ export function SubmissionTable({ items }: { items: Submission[] }) {
                 <Status value={s.status} />
               </td>
               <td>
-                <Link
-                  aria-label={"Open " + s.title}
-                  href={"/workspace/submissions/" + s.id}
-                >
+                <Link aria-label={"Open " + s.title} href={"/submissions/" + s.id}>
                   ↗
                 </Link>
               </td>
@@ -92,7 +89,7 @@ export function Dashboard({ me }: { me: Me }) {
         description="A clear path from collected documents to approved submissions."
       >
         {me.permissions.includes("submissions.write") && (
-          <Link className="button primary" href="/workspace/submissions/new">
+          <Link className="button primary" href="/submissions/new">
             ＋ New submission
           </Link>
         )}
@@ -129,10 +126,8 @@ export function Dashboard({ me }: { me: Me }) {
           <ul>
             {data.blocking_queue.map((item) => (
               <li key={item.submission_id + item.key}>
-                <Link href={"/workspace/submissions/" + item.submission_id}>
-                  {item.title}
-                </Link>
-                : {item.message}
+                <Link href={"/submissions/" + item.submission_id}>{item.title}</Link>:{" "}
+                {item.message}
               </li>
             ))}
           </ul>
@@ -179,7 +174,7 @@ export function InsuredDirectory({ me }: { me: Me }) {
       {create && (
         <section className="panel padded">
           <h2>New insured account</h2>
-          <InsuredForm onSaved={(id) => router.push("/workspace/insureds/" + id)} />
+          <InsuredForm onSaved={(id) => router.push("/insureds/" + id)} />
         </section>
       )}
       <div className="search">
@@ -209,7 +204,7 @@ export function InsuredDirectory({ me }: { me: Me }) {
                   {resource.data.items.map((i) => (
                     <tr key={i.id}>
                       <td>
-                        <Link className="row-link" href={"/workspace/insureds/" + i.id}>
+                        <Link className="row-link" href={"/insureds/" + i.id}>
                           {i.name}
                         </Link>
                         {i.dba && <small className="muted block">DBA {i.dba}</small>}
@@ -318,10 +313,7 @@ export function InsuredDetail({ id, me }: { id: string; me: Me }) {
           <button onClick={() => setEditing(!editing)}>Edit account</button>
         )}
         {me.permissions.includes("submissions.write") && (
-          <Link
-            className="button primary"
-            href={"/workspace/submissions/new?insured=" + id}
-          >
+          <Link className="button primary" href={"/submissions/new?insured=" + id}>
             ＋ New submission
           </Link>
         )}
@@ -373,7 +365,7 @@ export function SubmissionList({ me }: { me: Me }) {
         description="Every CGL submission, from intake through final approval."
       >
         {me.permissions.includes("submissions.write") && (
-          <Link className="button primary" href="/workspace/submissions/new">
+          <Link className="button primary" href="/submissions/new">
             ＋ New submission
           </Link>
         )}
@@ -412,7 +404,7 @@ export function NewSubmission({
       <section className="panel padded narrow">
         {!data.items.length ? (
           <Empty title="Create an insured account first">
-            <Link className="button primary" href="/workspace/insureds">
+            <Link className="button primary" href="/insureds">
               Open insured accounts
             </Link>
           </Empty>
@@ -433,7 +425,7 @@ export function NewSubmission({
                 prior_submission_id: prior?.id ?? null,
               };
               const s = await send<Submission>("/submissions", value);
-              router.push("/workspace/submissions/" + s.id);
+              router.push("/submissions/" + s.id);
             }}
           >
             <Field title="Insured account" name="insured_id" required>

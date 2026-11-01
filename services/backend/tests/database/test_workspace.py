@@ -69,7 +69,9 @@ def post(client: TestClient, path: str, body: Any) -> Any:
 def demo(client: TestClient) -> tuple[str, dict[str, Any]]:
     response = post(client, "/auth/demo", {})
     assert response.status_code == 201, response.text
-    return response.json()["submission_id"], client.get("/api/v1/me").json()
+    actor = client.get("/api/v1/me").json()
+    client.headers["X-Agency-Context"] = actor["agency_context"]
+    return response.json()["submission_id"], actor
 
 
 def process_pending(configuration: Settings, actor: dict[str, Any]) -> None:
@@ -1123,3 +1125,304 @@ def test_partial_policy_stays_incomplete_even_when_other_documents_supply_covera
         and "Policy effective date" in issues[0]["message"]
     )
     assert not current["readiness"]["ready"]
+
+
+def test_agency_context_rotation_rejects_stale_tabs(client: TestClient) -> None:
+    submission, actor = demo(client)
+    old_context = actor["agency_context"]
+    old_cookie = client.cookies.get("cgl_session")
+    assert post(client, "/auth/agency", {"tenant_id": actor["tenant_id"]}).status_code == 200
+    assert client.cookies.get("cgl_session") != old_cookie
+    stale = client.get("/api/v1/submissions/" + submission)
+    assert stale.status_code == 409 and stale.json()["detail"]["code"] == "AGENCY_CONTEXT_CHANGED"
+    current = client.get("/api/v1/me").json()
+    assert current["agency_context"] != old_context
+    client.headers["X-Agency-Context"] = current["agency_context"]
+    assert client.get("/api/v1/submissions/" + submission).status_code == 200
+    assert (
+        client.get(
+            "/api/v1/submissions/" + submission, headers={"X-Agency-Context": ""}
+        ).status_code
+        == 409
+    )
+
+
+def test_resumable_upload_hash_conflict_retry_and_quarantine(
+    client: TestClient, workspace_settings: Settings
+) -> None:
+    from app.demo import pdf
+    from app.domain.models import DocumentVersion
+    from app.uploads import CHUNK_SIZE
+
+    submission, actor = demo(client)
+    content = pdf(["Insured: Fictional Resumable Example"]) + b"\n%" + b" " * CHUNK_SIZE
+    initialized = post(
+        client,
+        f"/submissions/{submission}/uploads",
+        {"filename": "fictional.pdf", "sha256": digest(content), "byte_size": len(content)},
+    )
+    assert initialized.status_code == 201, initialized.text
+    upload_id = initialized.json()["id"]
+    assert post(client, f"/uploads/{upload_id}/finalize", {}).status_code == 409
+    headers = {
+        "X-CSRF-Token": client.cookies.get("cgl_csrf", "") or "",
+        "Content-Type": "application/octet-stream",
+    }
+    path = f"/api/v1/uploads/{upload_id}/parts/0"
+    assert client.put(path, content=content[:CHUNK_SIZE], headers=headers).status_code == 200
+    assert client.put(path, content=content[:CHUNK_SIZE], headers=headers).status_code == 200
+    assert client.put(path, content=b"x" * CHUNK_SIZE, headers=headers).status_code == 409
+    assert client.get(f"/api/v1/uploads/{upload_id}").json()["uploaded_parts"] == [0]
+    assert (
+        client.put(
+            f"/api/v1/uploads/{upload_id}/parts/1", content=content[CHUNK_SIZE:], headers=headers
+        ).status_code
+        == 200
+    )
+    finalized = post(client, f"/uploads/{upload_id}/finalize", {})
+    assert finalized.status_code == 200, finalized.text
+    assert (
+        post(client, f"/uploads/{upload_id}/finalize", {}).json()["document_id"]
+        == finalized.json()["document_id"]
+    )
+    document_id = finalized.json()["document_id"]
+    assert client.get(f"/api/v1/documents/{document_id}/content").status_code == 409
+    db = Database(workspace_settings)
+    with db.tenant(UUID(actor["tenant_id"]), UUID(actor["user_id"])) as session:
+        document = session.get(DocumentVersion, UUID(document_id))
+        assert (
+            document and document.sha256 == digest(content) and document.fixture_signature is None
+        )
+    db.close()
+    with TestClient(create_app(workspace_settings)) as outsider:
+        outsider.headers["Origin"] = "http://testserver"
+        demo(outsider)
+        assert outsider.get(f"/api/v1/uploads/{upload_id}").status_code == 404
+
+
+def test_billing_role_is_separate_and_subscription_limits_apply(
+    client: TestClient, workspace_settings: Settings
+) -> None:
+    from app.platform_models import Subscription
+
+    submission, actor = demo(client)
+    assert client.get("/api/v1/billing").status_code == 403
+    member = next(
+        item
+        for item in client.get("/api/v1/agency").json()["members"]
+        if item["id"] == actor["membership_id"]
+    )
+    headers = {"X-CSRF-Token": client.cookies.get("cgl_csrf", "") or ""}
+    assert (
+        client.patch(
+            "/api/v1/memberships/" + member["id"],
+            json={
+                "expected_version": member["row_version"],
+                "status": "active",
+                "roles": ["tenant_admin", "billing_admin"],
+            },
+            headers=headers,
+        ).status_code
+        == 200
+    )
+    billing = client.get("/api/v1/billing")
+    assert billing.status_code == 200 and billing.json()["payment_connected"] is False
+    assert client.get("/api/v1/submissions/" + submission).status_code == 403
+    assert (
+        post(
+            client,
+            "/billing/requests",
+            {"kind": "plan_change", "note": "Fictional request for more test seats"},
+        ).status_code
+        == 201
+    )
+    member = next(
+        item
+        for item in client.get("/api/v1/agency").json()["members"]
+        if item["id"] == actor["membership_id"]
+    )
+    assert (
+        client.patch(
+            "/api/v1/memberships/" + member["id"],
+            json={
+                "expected_version": member["row_version"],
+                "status": "active",
+                "roles": ["tenant_admin", "preparer"],
+            },
+            headers=headers,
+        ).status_code
+        == 200
+    )
+    db = Database(workspace_settings)
+    with db.tenant(UUID(actor["tenant_id"]), UUID(actor["user_id"])) as session:
+        subscription = session.scalar(sa.select(Subscription))
+        assert subscription is not None
+        subscription.status = "restricted"
+    db.close()
+    assert (
+        post(
+            client,
+            f"/submissions/{submission}/uploads",
+            {"filename": "fictional.pdf", "sha256": "0" * 64, "byte_size": 1},
+        ).status_code
+        == 403
+    )
+    assert client.get("/api/v1/submissions/" + submission).status_code == 200
+
+
+def test_managed_identity_activation_and_one_time_callback(
+    workspace_settings: Settings, database_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import timedelta
+    from urllib.parse import parse_qs, urlsplit
+    from uuid import uuid4
+
+    from app import oidc
+    from app.common import now
+    from app.platform_models import AgencyActivation
+
+    email = f"managed-{uuid4().hex}@example.invalid"
+    subject = uuid4().hex
+    configuration = workspace_settings.model_copy(
+        update={
+            "auth_mode": "oidc",
+            "oidc_issuer": "https://identity.example.invalid",
+            "oidc_client_id": "test-client",
+            "oidc_client_secret": SecretStr("test-secret"),
+            "oidc_authorization_endpoint": "https://identity.example.invalid/authorize",
+            "oidc_token_endpoint": "https://identity.example.invalid/token",
+            "oidc_jwks_uri": "https://identity.example.invalid/keys",
+        }
+    )
+
+    def fake_exchange(settings: Settings, code: str, verifier: str, nonce: str) -> dict[str, Any]:
+        assert len(verifier) >= 32 and len(nonce) >= 32
+        return {"sub": subject, "email": email, "name": "Fictional Managed Broker"}
+
+    monkeypatch.setattr(oidc, "exchange", fake_exchange)
+    with TestClient(create_app(configuration)) as browser:
+        browser.headers["Origin"] = "http://testserver"
+        assert post(browser, "/auth/demo", {}).status_code == 404
+        started = browser.get("/api/v1/auth/oidc/start?return_to=/activate", follow_redirects=False)
+        assert started.status_code == 303
+        state = parse_qs(urlsplit(started.headers["location"]).query)["state"][0]
+        assert "code_challenge_method=S256" in started.headers["location"]
+        with TestClient(create_app(configuration)) as wrong_browser:
+            rejected = wrong_browser.get(
+                f"/api/v1/auth/oidc/callback?state={state}&code=fictional", follow_redirects=False
+            )
+            assert "error=identity" in rejected.headers["location"]
+        callback = browser.get(
+            f"/api/v1/auth/oidc/callback?state={state}&code=fictional", follow_redirects=False
+        )
+        assert callback.headers["location"].endswith("/activate")
+        assert (
+            "error=identity"
+            in browser.get(
+                f"/api/v1/auth/oidc/callback?state={state}&code=fictional", follow_redirects=False
+            ).headers["location"]
+        )
+        actor = browser.get("/api/v1/me").json()
+        assert actor["tenant_id"] is None and actor["mfa_verified"]
+        token = "fictional-activation-" + uuid4().hex
+        with database_engine.begin() as connection:
+            connection.execute(
+                sa.insert(AgencyActivation).values(
+                    token_hash=digest(token),
+                    email=email,
+                    agency_name="Managed Fictional Agency",
+                    expires_at=now() + timedelta(days=1),
+                    operator_reference="integration-test",
+                )
+            )
+        activated = post(
+            browser,
+            "/auth/activate",
+            {"token": token, "acknowledge": True, "terms_version": "preview-1"},
+        )
+        assert activated.status_code == 200, activated.text
+        assert (
+            post(
+                browser,
+                "/auth/activate",
+                {"token": token, "acknowledge": True, "terms_version": "preview-1"},
+            ).json()["tenant_id"]
+            == activated.json()["tenant_id"]
+        )
+        actor = browser.get("/api/v1/me").json()
+        browser.headers["X-Agency-Context"] = actor["agency_context"]
+        assert set(actor["roles"]) == {"tenant_admin", "billing_admin"}
+        assert browser.get("/api/v1/submissions").status_code == 403
+        assert browser.get("/api/v1/billing").status_code == 200
+        setup = browser.get("/api/v1/agency/onboarding").json()
+        updated = browser.patch(
+            "/api/v1/agency/onboarding",
+            json={
+                "name": setup["name"],
+                "timezone": "America/Chicago",
+                "contact_email": email,
+                "expected_version": setup["row_version"],
+                "acknowledge": True,
+            },
+            headers={"X-CSRF-Token": browser.cookies.get("cgl_csrf", "") or ""},
+        )
+        assert updated.status_code == 200 and updated.json()["completed_at"]
+
+
+def test_queued_work_rechecks_original_author_permissions(
+    client: TestClient, workspace_settings: Settings
+) -> None:
+    submission, actor = demo(client)
+    member = next(
+        item
+        for item in client.get("/api/v1/agency").json()["members"]
+        if item["id"] == actor["membership_id"]
+    )
+    response = client.patch(
+        "/api/v1/memberships/" + member["id"],
+        json={
+            "expected_version": member["row_version"],
+            "status": "active",
+            "roles": ["tenant_admin"],
+        },
+        headers={"X-CSRF-Token": client.cookies.get("cgl_csrf", "") or ""},
+    )
+    assert response.status_code == 200
+    process_pending(workspace_settings, actor)
+    db = Database(workspace_settings)
+    with db.tenant(UUID(actor["tenant_id"]), UUID(actor["user_id"])) as session:
+        jobs = list(
+            session.scalars(
+                sa.select(ProcessingJob).where(ProcessingJob.submission_id == UUID(submission))
+            )
+        )
+        assert jobs and all(
+            job.status == "failed" and job.error_code == "JOB_PERMISSION_REVOKED" for job in jobs
+        )
+    db.close()
+
+
+def test_invitation_creation_retry_recovers_same_link_and_revocation(client: TestClient) -> None:
+    from uuid import uuid4
+
+    demo(client)
+    payload = {"email": f"colleague-{uuid4().hex}@example.invalid", "roles": ["preparer"]}
+    headers = {
+        "X-CSRF-Token": client.cookies.get("cgl_csrf", "") or "",
+        "Idempotency-Key": str(uuid4()),
+    }
+    first = client.post("/api/v1/invitations", json=payload, headers=headers)
+    assert first.status_code == 201, first.text
+    repeated = client.post("/api/v1/invitations", json=payload, headers=headers)
+    assert repeated.json() == first.json()
+    assert (
+        client.post(
+            "/api/v1/invitations", json={**payload, "roles": ["approver"]}, headers=headers
+        ).status_code
+        == 409
+    )
+    invitation_id = first.json()["invitation"]["id"]
+    assert post(client, f"/invitations/{invitation_id}/revoke", {}).status_code == 200
+    assert post(client, f"/invitations/{invitation_id}/revoke", {}).status_code == 200
+    invitations = client.get("/api/v1/agency").json()["invitations"]
+    assert next(item for item in invitations if item["id"] == invitation_id)["status"] == "revoked"

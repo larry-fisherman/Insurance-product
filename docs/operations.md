@@ -51,3 +51,7 @@ Review active agency memberships, role grants, stale invitations, retained demo 
 External provider endpoints are operator configuration, not user-supplied URLs. Gateway endpoints must use HTTPS; OpenAI uses its fixed HTTPS Responses endpoint. Redirects are disabled, input/output are bounded, and material values/citations are validated before persistence. Upload text is untrusted data and cannot call tools or override extraction instructions.
 
 The local filesystem is the default Compose storage, mounted only into API/worker/scheduler, with app-owned private directories/files. To deploy S3, first validate bucket privacy, versioning, encryption/KMS, least-privilege runtime IAM, retention/lifecycle, deletion, and restore using the actual provider. Do not infer S3 controls from the existence of an adapter. Public-cloud infrastructure is deliberately not provisioned or represented as ready by this repository.
+
+## Separate web experiences
+
+See [web platform operations](web-platform-operations.md) for the two local hosts, agency activation/operator commands, manual subscriptions, isolated inquiry storage and parser service. Existing backup coverage does not automatically include the new public inquiry volume. Preserve both operations and inquiry volumes; do not reset data to resolve startup problems.

@@ -1,9 +1,7 @@
 name: cgl-workspace
 
 x-app: &app
-  build:
-    context: .
-    dockerfile: infra/local/api.Dockerfile
+  image: cgl-workspace-backend:local
   env_file: services/backend/.env.app
   environment: &environment
     CGL_APP_ENV: local
@@ -14,6 +12,7 @@ x-app: &app
     CGL_STORAGE_PATH: /data/objects
     CGL_CLAMAV_HOST: clamav
     CGL_CLAMAV_PORT: "3310"
+    CGL_MARKETING_ORIGIN: ${MARKETING_ORIGIN:-http://127.0.0.1:3001}
   init: true
   read_only: true
   tmpfs: ["/tmp"]
@@ -25,11 +24,18 @@ x-app: &app
 services:
   api:
     <<: *app
+    build:
+      context: .
+      dockerfile: infra/local/api.Dockerfile
     ports: ["127.0.0.1:8000:8000"]
     depends_on:
       redis: { condition: service_healthy }
   worker:
     <<: *app
+    environment:
+      <<: *environment
+      CGL_PARSER_ENDPOINT: http://parser:8020
+    networks: [default, database, parsing]
     command: celery -A app.worker:celery worker --loglevel=WARNING --concurrency=2 --max-tasks-per-child=25
     healthcheck: { disable: true }
     mem_limit: 2g
@@ -68,6 +74,8 @@ services:
       args:
         API_INTERNAL_URL: http://api:8000
     ports: ["127.0.0.1:3000:3000"]
+    environment:
+      APPLICATION_ORIGIN: ${CGL_PUBLIC_ORIGIN:-http://localhost:3000}
     depends_on:
       api: { condition: service_healthy }
     init: true
@@ -76,11 +84,84 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
 
+  marketing:
+    build:
+      context: .
+      dockerfile: infra/local/marketing.Dockerfile
+      args:
+        APPLICATION_ORIGIN: ${CGL_PUBLIC_ORIGIN:-http://localhost:3000}
+        MARKETING_ORIGIN: ${MARKETING_ORIGIN:-http://127.0.0.1:3001}
+    environment:
+      APPLICATION_ORIGIN: ${CGL_PUBLIC_ORIGIN:-http://localhost:3000}
+      MARKETING_ORIGIN: ${MARKETING_ORIGIN:-http://127.0.0.1:3001}
+      INQUIRY_INTERNAL_URL: http://inquiries:8010
+    ports: ["127.0.0.1:3001:3001"]
+    networks: [public-intake]
+    depends_on:
+      inquiries: { condition: service_healthy }
+    init: true
+    read_only: true
+    tmpfs: ["/tmp"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+  inquiries:
+    image: cgl-workspace-backend:local
+    environment:
+      INQUIRY_ENVIRONMENT: local
+      INQUIRY_DATABASE_URL: sqlite:////data/inquiries/contacts.sqlite3
+    command: /bin/sh -c 'python -m app.inquiries migrate && exec uvicorn app.inquiries:create_app --factory --host 0.0.0.0 --port 8010 --no-access-log'
+    volumes: [public-inquiries:/data]
+    networks: [public-intake]
+    init: true
+    read_only: true
+    tmpfs: ["/tmp"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health', timeout=2)",
+        ]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+  parser:
+    image: cgl-workspace-backend:local
+    command: uvicorn app.parser_service:create_app --factory --host 0.0.0.0 --port 8020 --no-access-log
+    networks: [parsing]
+    init: true
+    read_only: true
+    tmpfs: ["/tmp:size=256m,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 2g
+    cpus: 2
+    pids_limit: 96
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import json,urllib.request; assert json.load(urllib.request.urlopen('http://127.0.0.1:8020/health', timeout=2))['ready']",
+        ]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+
 volumes:
   redis:
   private-files:
   signatures:
+  public-inquiries:
 networks:
+  public-intake:
+    internal: true
+  parsing:
+    internal: true
   database:
     external: true
     name: cgl-database_default

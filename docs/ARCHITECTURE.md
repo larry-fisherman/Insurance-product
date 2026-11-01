@@ -1,6 +1,6 @@
 # Architecture
 
-Updated: October 30, 2026. The system is an insurance document intelligence and workflow platform with CGL as its first domain implementation. This document separates the running architecture from the intended extension boundary.
+Updated: November 1, 2026. The system is an insurance document intelligence and workflow platform with CGL as its first domain implementation. This document separates the running architecture from the intended extension boundary.
 
 ## Running system
 
@@ -8,7 +8,9 @@ The repository uses a modular monolith with asynchronous workers. It does not im
 
 ```mermaid
 flowchart LR
-    Browser[Next.js workspace] -->|same-origin /api/v1| API[FastAPI]
+    Public[Next.js marketing] --> Intake[Isolated inquiry receiver]
+    Intake --> Leads[(Separate inquiry database)]
+    Browser[Next.js operations] -->|same-origin /api/v1| API[FastAPI]
     API --> Auth[Restricted identity connection]
     API --> DB[(PostgreSQL: scoped business records)]
     API --> Store[Private versioned file access]
@@ -16,26 +18,26 @@ flowchart LR
     Outbox --> Queue[Redis / Celery]
     Queue --> Worker[Scoped worker with leases]
     Worker --> Scan[ClamAV quarantine gate]
-    Worker --> Parse[PDF / XLSX / OCR subprocesses]
+    Worker --> Parse[Credential-free parsing service / bounded child]
     Worker --> Extract[Local parser or configured provider]
     Worker --> Render[Original package renderer]
     Worker --> DB
     Worker --> Store
 ```
 
-The diagram shows logical responsibilities. Parsing subprocesses currently run inside the application worker's permissions boundary; they are not a separately isolated service. PostgreSQL holds identity and business data in the same database with separate restricted access paths.
+The diagram shows logical responsibilities. Full Compose parsing runs in a separate credential-free container on a worker-only internal network; native tests without a parser endpoint retain an in-process fallback. Hosted sandbox acceptance remains open. PostgreSQL holds identity and business data in the same database with separate restricted access paths.
 
-| Area             | Current implementation                                                                                                      |
-| ---------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| Web              | Next.js, React, TypeScript; authenticated workspace and public routes under `apps/web`; same-origin API proxy               |
-| API              | FastAPI in `services/backend/app`; strict Pydantic contracts; session-derived tenant scope                                  |
-| Persistence      | PostgreSQL, SQLAlchemy, Alembic; tenant foreign keys, forced RLS, immutable evidence/review history                         |
-| Identity         | Local password/TOTP/recovery and opaque sessions; managed OIDC is not connected                                             |
-| Async processing | Celery/Redis, database jobs/outbox, scheduler, bounded attempts and expiring leases                                         |
-| Files            | Private shared filesystem for local Compose; configured S3 adapter with version-addressed access, pending hosted validation |
-| Intake           | Quarantine/ClamAV, bounded pypdf/openpyxl parsing, PDFium/Tesseract OCR                                                     |
-| Extraction       | Explicit-label parser by default; optional OpenAI Responses and approved HTTPS gateway adapters                             |
-| Output           | ReportLab/openpyxl original PDF/XLSX and supporting ZIP; deterministic narrative and sealed manifests                       |
+| Area             | Current implementation                                                                                                               |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Web              | Next.js, React, TypeScript; separate `apps/web` operations and `apps/marketing` public builds; operations-only same-origin API proxy |
+| API              | FastAPI in `services/backend/app`; strict Pydantic contracts; session-derived tenant scope                                           |
+| Persistence      | PostgreSQL, SQLAlchemy, Alembic; tenant foreign keys, forced RLS, immutable evidence/review history                                  |
+| Identity         | Local password/TOTP/recovery or server-side OIDC adapter; opaque sessions and context binding; live provider acceptance pending      |
+| Async processing | Celery/Redis, database jobs/outbox, scheduler, bounded attempts and expiring leases                                                  |
+| Files            | Private shared filesystem for local Compose; configured S3 adapter with version-addressed access, pending hosted validation          |
+| Intake           | Quarantine/ClamAV, bounded pypdf/openpyxl parsing, PDFium/Tesseract OCR                                                              |
+| Extraction       | Explicit-label parser by default; optional OpenAI Responses and approved HTTPS gateway adapters                                      |
+| Output           | ReportLab/openpyxl original PDF/XLSX and supporting ZIP; deterministic narrative and sealed manifests                                |
 
 `compose.full.yaml` runs the review product, `compose.database.yaml` provisions local PostgreSQL, and `compose.yaml` is a health-shell smoke setup. Staging, production, and non-synthetic mode fail closed.
 
@@ -96,3 +98,7 @@ Record material implementation choices in `docs/decisions/`. Schema evolution us
 ## Operational boundary
 
 Local backup/restore, queue recovery, and configuration procedures are in [operations](operations.md). Production identity, independent parser isolation, infrastructure encryption/IAM, observability, deletion/holds, and external vendor validation remain release work. An adapter's existence does not prove its deployment controls. See [SECURITY.md](SECURITY.md) and [ROADMAP.md](ROADMAP.md).
+
+## Web platform expansion
+
+[ADR 0004](decisions/0004-web-platform.md) records the independent runtime/network boundaries, OIDC flow, agency activation, manual subscription model, resumable intake and parser isolation. [Web platform operations](web-platform-operations.md) documents routes, configuration, local deviations and open acceptance. Marketing runs without operations credentials; inquiry storage defaults to a separate local SQLite volume and supports a dedicated PostgreSQL URL. No hosted or payment service is connected by this change.
