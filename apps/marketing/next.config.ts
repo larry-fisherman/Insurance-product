@@ -1,5 +1,8 @@
 import path from "node:path";
 import type { NextConfig } from "next";
+import { publicOrigins } from "../../packages/web-config/public-origins";
+
+publicOrigins(process.env);
 
 const config: NextConfig = {
   output: "standalone",

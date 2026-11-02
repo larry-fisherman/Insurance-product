@@ -4,7 +4,7 @@ import base64
 import hashlib
 import hmac
 import secrets
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from urllib.parse import urlencode, urlsplit
 from uuid import uuid4
@@ -145,7 +145,7 @@ def exchange(configuration: Settings, code: str, verifier: str, nonce: str) -> d
     ):
         raise ValueError("MFA required")
     if (
-        not isinstance(claims.get("auth_time"), (int, float))
+        type(claims.get("auth_time")) not in (int, float)
         or not -30 <= now().timestamp() - claims["auth_time"] <= 600
     ):
         raise ValueError("Recent authentication required")
@@ -283,7 +283,14 @@ def callback(request: Request, code: str = "", state: str = "") -> RedirectRespo
             )
         response = RedirectResponse(configuration.public_origin + return_path, status_code=303)
         set_session(
-            session, response, configuration, user.id, tenant_id, verified=True, method="oidc"
+            session,
+            response,
+            configuration,
+            user.id,
+            tenant_id,
+            verified=True,
+            method="oidc",
+            authenticated_at=min(datetime.fromtimestamp(claims["auth_time"], UTC), now()),
         )
         response.delete_cookie(browser_cookie(configuration), path="/")
         return response

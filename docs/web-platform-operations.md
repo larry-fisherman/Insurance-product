@@ -69,6 +69,8 @@ Run `make verify-platform` to inspect runtime network/credential/mount/port sepa
 
 All checks used local/generated fictional data. No paid provider calls, external messages, customer data or public deployment were involved.
 
+The table below records the implementation handoff. The subsequent [plan/code audit](WEB_PLATFORM_AUDIT.md) contains newer verification, reproduced open defects and a browser run that timed out after approval. Use the audit when assessing current completion or release eligibility; earlier passes remain dated historical evidence.
+
 | Check                 | Evidence                                                                                                                                                                                                                                                    |
 | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Backend               | `make check-api`: Ruff, mypy and 80 non-database tests passed, including bounded parser concurrency and credential rejection.                                                                                                                               |
@@ -80,8 +82,20 @@ All checks used local/generated fictional data. No paid provider calls, external
 
 `make full-up` also completed successfully with the final readiness checks: both websites, the API, parser, inquiry receiver and Redis became healthy. Worker and scheduler processes started; the browser workflow exercises their processing path. ClamAV was running for the ordinary-upload acceptance check.
 
+After the final navigation update and rebuild, the focused broker workflow passed again, including confirmation that the submission heading reflects the approved status.
+
 Live testing identified and corrected parser-slot contention, the marketing port's need for a separate edge network, and healthcheck Host-header handling. Temporary failures are not treated as successful runs; the browser suite and affected runtime checks were rerun after those corrections. Existing records, configuration and volumes were preserved.
 
 See [ADR 0004](decisions/0004-web-platform.md) for decisions and local deviations. No production approval follows from passing synthetic tests.
 
 For native Next.js runs, set `APPLICATION_ORIGIN` to match the operations host and `CGL_PUBLIC_ORIGIN`, and set `MARKETING_ORIGIN` to the separate public host. Marketing uses only these public origins and `INQUIRY_INTERNAL_URL`; never copy the backend environment into marketing. `npm run dev:marketing` starts the public app on port 3001. The full Compose stack supplies its isolated inquiry address automatically.
+
+## Audit remediation deployment
+
+The first [audit remediation batch](WEB_PLATFORM_AUDIT.md#remediation-batch-1--november-1-2026) requires migration `0008_versions` and rebuilt API/worker/parser/web/marketing images. Use the existing `make full-up` path after verification. Preserve existing environment files, database records and volumes. Old application images must not continue writing after defaults are removed; coordinate the local restart. No data backfill is required or authorized by this migration.
+
+Set both `APPLICATION_ORIGIN` and `MARKETING_ORIGIN` for native frontend builds and runtime. They must have different hostnames: different ports or HTTP versus HTTPS on the same host do not isolate cookies. Defaults remain `http://localhost:3000` and `http://127.0.0.1:3001`. Compose passes both public values; neither belongs to a secret configuration bundle.
+
+Configured extraction gateways must honor `Accept-Encoding: identity`. Compressed responses are rejected before decompression. Responses are limited to 2 MiB and JSON depth 32 (including enclosed output/value JSON); connect inactivity is bounded to 10 seconds, writes to 30 seconds and reads to 90 seconds, and a 90-second elapsed deadline is checked at response chunks/completion. A socket wait can run until its timeout before the elapsed check. Oversized, compressed and malformed output does not become extracted facts. These limits are not cost accounting or live provider acceptance.
+
+OIDC recent-authentication checks now use signed provider authentication time, with allowed future skew clamped to callback time. Existing sessions retain their stored timestamps; revoke them or let them expire before relying on the correction. Real identity-provider acceptance remains required.

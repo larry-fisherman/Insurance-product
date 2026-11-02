@@ -31,7 +31,7 @@ from app.database.models import (
     Tenant,
 )
 from app.documents import MAX_FILE, DocumentError, fixture_signature, validate_file
-from app.domain.cgl import FIELD_LABELS
+from app.domain.cgl import FIELD_LABELS, REQUIREMENT_PROFILE
 from app.domain.models import (
     Approval,
     CanonicalRevision,
@@ -872,6 +872,7 @@ def accept_exception(submission_id: UUID, payload: ExceptionInput, scope: Scoped
             submission_id=submission.id,
             key=payload.key,
             kind="missing",
+            rule_version=REQUIREMENT_PROFILE,
             severity="material",
             message=item["message"],
             observation_ids=[],
@@ -884,6 +885,7 @@ def accept_exception(submission_id: UUID, payload: ExceptionInput, scope: Scoped
         scope.actor.user_id,
     )
     row.input_fingerprint = payload.fingerprint
+    row.rule_version = REQUIREMENT_PROFILE
     scope.session.flush()
     submission.row_version += 1
     revision = save_revision(scope, submission)

@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { publicOrigins } from "../../../packages/web-config/public-origins";
+
 export function proxy(request: NextRequest) {
-  const origin = new URL(process.env.APPLICATION_ORIGIN ?? "http://localhost:3000");
+  const origin = new URL(publicOrigins(process.env).appOrigin);
   if (request.headers.get("host") !== origin.host)
     return new NextResponse("Unknown application host", { status: 421 });
   const headers = new Headers(request.headers);

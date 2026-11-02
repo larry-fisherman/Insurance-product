@@ -81,6 +81,10 @@ class Settings(BaseSettings):
                 or parsed.fragment
             ):
                 raise ValueError("Configure plain HTTP(S) public origins")
+        app_host = (urlsplit(self.public_origin).hostname or "").rstrip(".").encode("idna")
+        marketing_host = (urlsplit(self.marketing_origin).hostname or "").rstrip(".").encode("idna")
+        if app_host == marketing_host:
+            raise ValueError("Application and marketing must use different cookie hostnames")
         if self.parser_endpoint:
             parser_url = urlsplit(self.parser_endpoint)
             if (

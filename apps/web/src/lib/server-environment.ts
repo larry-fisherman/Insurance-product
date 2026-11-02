@@ -1,3 +1,5 @@
+import { publicOrigins } from "../../../../packages/web-config/public-origins";
+
 export function readServerEnvironment(environment: Record<string, string | undefined>): {
   apiOrigin: string;
 } {
@@ -27,5 +29,6 @@ export function readServerEnvironment(environment: Record<string, string | undef
     );
   }
 
+  publicOrigins(environment);
   return { apiOrigin: parsed.origin };
 }

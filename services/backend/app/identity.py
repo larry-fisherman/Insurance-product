@@ -143,7 +143,10 @@ def set_session(
     *,
     verified: bool,
     method: str = "password",
+    authenticated_at: datetime | None = None,
 ) -> AuthSession:
+    if method == "oidc" and authenticated_at is None:
+        raise ValueError("OIDC sessions require the validated provider authentication time")
     token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
     row = AuthSession(
         user_id=user_id,
@@ -153,6 +156,7 @@ def set_session(
         active_tenant_id=tenant_id,
         mfa_verified=verified,
         auth_method=method,
+        authenticated_at=authenticated_at or now(),
     )
     session.add(row)
     session.flush()

@@ -28,10 +28,10 @@ def install_response(monkeypatch: pytest.MonkeyPatch, body: dict[str, Any]) -> l
     def handler(request: httpx2.Request) -> httpx2.Response:
         assert str(request.url) == "https://api.openai.com/v1/responses"
         calls.append(json.loads(request.content))
-        return httpx2.Response(200, json=body)
+        return httpx2.Response(200, stream=httpx2.ByteStream(json.dumps(body).encode()))
 
     monkeypatch.setattr(
-        "app.documents.httpx2.Client",
+        "app.provider_transport.httpx2.Client",
         lambda **kwargs: original(transport=httpx2.MockTransport(handler)),
     )
     return calls

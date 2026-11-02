@@ -10,6 +10,7 @@ ARG APPLICATION_ORIGIN=http://localhost:3000
 ARG MARKETING_ORIGIN=http://127.0.0.1:3001
 ENV APPLICATION_ORIGIN=$APPLICATION_ORIGIN MARKETING_ORIGIN=$MARKETING_ORIGIN NEXT_TELEMETRY_DISABLED=1
 COPY apps/marketing ./apps/marketing
+COPY packages/web-config ./packages/web-config
 RUN npm run build --workspace @cgl/marketing
 
 FROM node:24-bookworm-slim AS runtime

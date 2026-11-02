@@ -8,6 +8,8 @@ The user approved implementation after this plan was drafted. That authorization
 
 The separate marketing/operations applications, isolated inquiry intake, OIDC adapter, controlled agency activation/onboarding, billing role/manual subscriptions, session/agency context binding, resumable uploads and credential-free parser service are implemented for local verification. See [local operation and remaining acceptance](web-platform-operations.md) and [ADR 0004](decisions/0004-web-platform.md). Hosted identity/payment services and release gates remain open. The current-code findings below record the pre-implementation baseline; they are retained as design rationale, not a statement that new components are absent.
 
+The subsequent [November 1 plan/code audit](WEB_PLATFORM_AUDIT.md) assesses the complete plan as **partially fulfilled** and records reproduced defects, missing pages/integrations, current verification and ordered next steps. Earlier successful workflow runs remain historical evidence; they do not close those findings or release gates.
+
 ## Recommended direction
 
 Build two distinct experiences in one repository:

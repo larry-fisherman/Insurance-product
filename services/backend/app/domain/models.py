@@ -213,7 +213,7 @@ class Discrepancy(Base, TenantRecord):
     observation_ids: Mapped[list[str]] = mapped_column(JSONB)
     resolution_reason: Mapped[str | None] = mapped_column(sa.Text)
     resolved_by: Mapped[UUID | None] = mapped_column(sa.ForeignKey("app.app_user.id"))
-    rule_version: Mapped[str] = mapped_column(sa.Text, server_default="cgl-1")
+    rule_version: Mapped[str] = mapped_column(sa.Text)
 
 
 class ReviewDecision(Base, TenantRecord):
@@ -246,7 +246,7 @@ class CanonicalRevision(Base, TenantRecord):
     input_version: Mapped[int]
     snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB)
     sha256: Mapped[str] = mapped_column(sa.String(64))
-    schema_version: Mapped[str] = mapped_column(sa.Text, server_default="cgl-1")
+    schema_version: Mapped[str] = mapped_column(sa.Text)
     created_by: Mapped[UUID] = mapped_column(sa.ForeignKey("app.app_user.id"))
 
 

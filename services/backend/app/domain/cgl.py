@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from app.common import canonical_json, digest
 
 PIPELINE_VERSION = "cgl-extraction-2"
+SCHEMA_VERSION = "cgl-2"
 RULE_VERSION = "cgl-rules-2"
 REQUIREMENT_PROFILE = "cgl-synthetic-2"
 

@@ -37,3 +37,30 @@ def test_application_factory_validates_environment(monkeypatch: pytest.MonkeyPat
     monkeypatch.setenv("CGL_APP_ENV", "production")
     with pytest.raises(ValidationError):
         create_app()
+
+
+@pytest.mark.parametrize(
+    "app,marketing",
+    [
+        ("http://localhost:3000", "http://localhost:3001"),
+        ("https://APP.example.invalid", "http://app.example.invalid:8080"),
+        ("https://app.example.invalid.", "https://app.example.invalid"),
+        ("http://[::1]:3000", "http://[::1]:3001"),
+    ],
+)
+def test_same_cookie_hostname_fails_closed(app: str, marketing: str) -> None:
+    with pytest.raises(ValidationError, match="different cookie hostnames"):
+        Settings(
+            _env_file=None, app_env=Environment.TEST, public_origin=app, marketing_origin=marketing
+        )
+
+
+def test_distinct_https_hosts_use_host_only_secure_cookie_names() -> None:
+    configuration = Settings(
+        _env_file=None,
+        app_env=Environment.TEST,
+        public_origin="https://app.example.invalid",
+        marketing_origin="https://www.example.invalid",
+    )
+    assert configuration.session_cookie == "__Host-app_session"
+    assert configuration.csrf_cookie == "__Host-app_csrf"

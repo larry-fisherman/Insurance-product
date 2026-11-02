@@ -114,8 +114,10 @@ def test_evidence_upgrade_invalidates_legacy_current_approvals_without_rewriting
     from datetime import date
     from uuid import uuid4
 
+    from app.common import canonical_json, digest
     from app.database.models import AppUser, Membership, Tenant
     from app.domain.models import (
+        CanonicalRevision,
         DocumentVersion,
         InsuredAccount,
         Observation,
@@ -223,8 +225,33 @@ def test_evidence_upgrade_invalidates_legacy_current_approvals_without_rewriting
                 reviewer_id=user_id,
             )
         )
+        # Preserve the historical mismatch as evidence, rather than rewriting
+        # immutable snapshots/hashes to agree with newly corrected writers.
+        historical_revision = uuid4()
+        snapshot = {"schema_version": "cgl-2", "facts": []}
+        historical_hash = digest(canonical_json(snapshot))
+        connection.execute(
+            sa.insert(CanonicalRevision).values(
+                id=historical_revision,
+                tenant_id=tenant_id,
+                submission_id=submission_id,
+                number=1,
+                input_version=1,
+                schema_version="cgl-1",
+                snapshot=snapshot,
+                sha256=historical_hash,
+                created_by=user_id,
+            )
+        )
         connection.commit()
         command.upgrade(config, "head")
+        assert connection.execute(
+            sa.select(
+                CanonicalRevision.schema_version,
+                CanonicalRevision.snapshot,
+                CanonicalRevision.sha256,
+            ).where(CanonicalRevision.id == historical_revision)
+        ).one() == ("cgl-1", snapshot, historical_hash)
         row = connection.execute(
             sa.select(Submission.input_version, Submission.row_version, Submission.status).where(
                 Submission.id == submission_id

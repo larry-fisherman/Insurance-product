@@ -7,9 +7,12 @@ RUN npm ci --no-audit --no-fund --loglevel=http
 
 FROM dependencies AS build
 ARG API_INTERNAL_URL
-ENV API_INTERNAL_URL=$API_INTERNAL_URL NEXT_TELEMETRY_DISABLED=1
+ARG APPLICATION_ORIGIN=http://localhost:3000
+ARG MARKETING_ORIGIN=http://127.0.0.1:3001
+ENV API_INTERNAL_URL=$API_INTERNAL_URL APPLICATION_ORIGIN=$APPLICATION_ORIGIN MARKETING_ORIGIN=$MARKETING_ORIGIN NEXT_TELEMETRY_DISABLED=1
 COPY apps/web ./apps/web
 COPY packages/contracts ./packages/contracts
+COPY packages/web-config ./packages/web-config
 RUN npm run build --workspace @cgl/web
 
 FROM node:24-bookworm-slim AS runtime

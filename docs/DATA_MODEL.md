@@ -106,3 +106,9 @@ Before enabling a second line, bind its versions explicitly across submission, e
 - `app_user.email_verified` and the expanded `oauth_state` support server-side managed identity. They do not prove live provider lifecycle acceptance.
 
 The `billing_admin` role grants billing/usage/agency metadata access without insured/document/review permission. New owners receive it plus `tenant_admin`; CGL preparer/approver roles remain explicit. The separate public inquiry database is outside the operations metadata and RLS schema. See [ADR 0004](decisions/0004-web-platform.md).
+
+## Explicit version writes (migration 0008)
+
+New canonical revisions set `schema_version` explicitly to the CGL schema version used by their snapshot. Snapshots also record the reconciliation `rule_version` alongside the requirements profile. Recomputed conflict findings set the active CGL rule version; accepted missing-information findings record the requirements-profile version that authorized their disposition. The database no longer supplies `cgl-1` defaults for these two columns: omitted versions fail instead of silently mislabeling new work.
+
+Migration `0008_versions` changes defaults only. It does not rewrite historical snapshots, columns, hashes, packages or approvals. Pre-fix revisions can retain a `cgl-1` column with a `cgl-2` snapshot; interpret them with that known limitation and preserve the mismatch as history. This correction is not a complete per-run parser/prompt/domain/template version registry. See [ADR 0005](decisions/0005-audit-boundaries.md).

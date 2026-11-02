@@ -15,6 +15,8 @@ from app.database.models import Membership, MembershipRole, OutboxEvent, Permiss
 from app.domain.cgl import (
     FIELD_LABELS,
     REQUIREMENT_PROFILE,
+    RULE_VERSION,
+    SCHEMA_VERSION,
     fingerprint,
     group_key,
     reconcile,
@@ -287,7 +289,10 @@ def refresh_issues(session: Session, submission: Submission) -> None:
         resolved = group["verified"]
         if row is None:
             row = Discrepancy(
-                tenant_id=submission.tenant_id, submission_id=submission.id, **finding
+                tenant_id=submission.tenant_id,
+                submission_id=submission.id,
+                rule_version=RULE_VERSION,
+                **finding,
             )
             session.add(row)
         else:
@@ -297,6 +302,7 @@ def refresh_issues(session: Session, submission: Submission) -> None:
             for key, value in finding.items():
                 setattr(row, key, value)
         row.status = "resolved" if resolved else "open"
+        row.rule_version = RULE_VERSION
     for key, row in existing.items():
         if row.kind == "conflict" and key not in active:
             row.status = "resolved"
@@ -777,7 +783,8 @@ def readiness(session: Session, submission: Submission) -> dict[str, Any]:
 def save_revision(scope: Scope, submission: Submission) -> CanonicalRevision:
     state = readiness(scope.session, submission)
     snapshot = {
-        "schema_version": "cgl-2",
+        "schema_version": SCHEMA_VERSION,
+        "rule_version": RULE_VERSION,
         "requirement_profile": REQUIREMENT_PROFILE,
         "document_inventory": state["document_inventory"],
         "submission_id": str(submission.id),
@@ -807,6 +814,7 @@ def save_revision(scope: Scope, submission: Submission) -> CanonicalRevision:
         number=submission.revision_number,
         input_version=submission.input_version,
         snapshot=snapshot,
+        schema_version=SCHEMA_VERSION,
         sha256=digest(canonical_json(snapshot)),
         created_by=scope.actor.user_id,
     )

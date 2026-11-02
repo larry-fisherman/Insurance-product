@@ -1297,7 +1297,12 @@ def test_managed_identity_activation_and_one_time_callback(
 
     def fake_exchange(settings: Settings, code: str, verifier: str, nonce: str) -> dict[str, Any]:
         assert len(verifier) >= 32 and len(nonce) >= 32
-        return {"sub": subject, "email": email, "name": "Fictional Managed Broker"}
+        return {
+            "sub": subject,
+            "email": email,
+            "name": "Fictional Managed Broker",
+            "auth_time": now().timestamp(),
+        }
 
     monkeypatch.setattr(oidc, "exchange", fake_exchange)
     with TestClient(create_app(configuration)) as browser:

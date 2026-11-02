@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 
 from app.config import Settings
 from app.documents import MAX_PAGES, MAX_TEXT_CHARS, Block, DocumentError, parse_pdf, parse_xlsx
+from app.parser_protocol import TRANSIENT_ERRORS, ParserFailure
 
 
 class ParsedBlock(BaseModel):
@@ -36,14 +37,24 @@ def parse_document(
             ) as response,
         ):
             body = bytearray()
+            output_limit = 12 * 1024 * 1024 if response.status_code == 200 else 4096
             for chunk in response.iter_bytes():
                 body.extend(chunk)
-                if len(body) > 12 * 1024 * 1024:
+                if len(body) > output_limit:
                     raise DocumentError("PARSER_OUTPUT_LIMIT")
             if response.status_code != 200:
+                try:
+                    failure = ParserFailure.model_validate_json(body)
+                except ValidationError:
+                    raise DocumentError(
+                        "PARSER_UNAVAILABLE"
+                        if response.status_code >= 500
+                        else "PARSER_INVALID_RESPONSE",
+                        retryable=response.status_code >= 500,
+                    ) from None
                 raise DocumentError(
-                    "PARSER_UNAVAILABLE" if response.status_code >= 500 else "PARSE_FAILED",
-                    retryable=response.status_code >= 500,
+                    failure.error,
+                    retryable=failure.error in TRANSIENT_ERRORS and response.status_code == 503,
                 )
         parsed = ParsedDocument.model_validate_json(body)
         if sum(len(block.text) for block in parsed.blocks) > MAX_TEXT_CHARS:

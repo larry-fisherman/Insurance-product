@@ -73,9 +73,12 @@ services:
       dockerfile: infra/local/web.Dockerfile
       args:
         API_INTERNAL_URL: http://api:8000
+        APPLICATION_ORIGIN: ${CGL_PUBLIC_ORIGIN:-http://localhost:3000}
+        MARKETING_ORIGIN: ${MARKETING_ORIGIN:-http://127.0.0.1:3001}
     ports: ["127.0.0.1:3000:3000"]
     environment:
       APPLICATION_ORIGIN: ${CGL_PUBLIC_ORIGIN:-http://localhost:3000}
+      MARKETING_ORIGIN: ${MARKETING_ORIGIN:-http://127.0.0.1:3001}
     depends_on:
       api: { condition: service_healthy }
     init: true

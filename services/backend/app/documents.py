@@ -3,7 +3,6 @@
 import hashlib
 import hmac
 import io
-import json
 import re
 import shutil
 import socket
@@ -18,7 +17,6 @@ from typing import Any
 from uuid import UUID, uuid4
 from xml.etree import ElementTree
 
-import httpx2
 import openpyxl
 import pypdfium2
 from openpyxl.utils import get_column_letter
@@ -29,6 +27,7 @@ from pypdf.generic import ArrayObject, DictionaryObject, IndirectObject
 from app.common import canonical_json, digest
 from app.config import Settings
 from app.domain.cgl import FIELD_LABELS, Context, normalize_money, validate_fact
+from app.provider_transport import ProviderResponseError, bounded_json, request_json
 
 MAX_FILE = 50 * 1024 * 1024
 MAX_PAGES = 500
@@ -945,21 +944,18 @@ def provider_extract(blocks: list[Block], configuration: Settings) -> list[Extra
                 "instructions": instructions,
                 **evidence,
             }
-        with httpx2.Client(timeout=90, follow_redirects=False) as client:
-            response = client.post(
-                endpoint,
-                headers={
-                    "Authorization": "Bearer "
-                    + (
-                        configuration.extraction_key.get_secret_value()
-                        if configuration.extraction_key
-                        else ""
-                    )
-                },
-                json=payload,
-            )
-            response.raise_for_status()
-            body = response.json()
+        body = request_json(
+            endpoint,
+            headers={
+                "Authorization": "Bearer "
+                + (
+                    configuration.extraction_key.get_secret_value()
+                    if configuration.extraction_key
+                    else ""
+                )
+            },
+            payload=payload,
+        )
         if configuration.extraction_provider == "openai":
             if body.get("status") != "completed":
                 raise DocumentError("PROVIDER_INCOMPLETE")
@@ -971,13 +967,21 @@ def provider_extract(blocks: list[Block], configuration: Settings) -> list[Extra
             ]
             if any(part.get("type") == "refusal" for part in content):
                 raise DocumentError("PROVIDER_REFUSED")
-            output = ProviderOutput.model_validate_json(
-                "".join(part["text"] for part in content if part.get("type") == "output_text")
+            output = ProviderOutput.model_validate(
+                bounded_json(
+                    "".join(
+                        part["text"] for part in content if part.get("type") == "output_text"
+                    ).encode()
+                )
             )
         else:
             output = ProviderOutput.model_validate(body)
     except DocumentError:
         raise
+    except ProviderResponseError as error:
+        raise DocumentError(
+            str(error), retryable=str(error) == "PROVIDER_RESPONSE_TIMEOUT"
+        ) from None
     except Exception:
         raise DocumentError("PROVIDER_EXTRACTION_FAILED", retryable=True) from None
     result = []
@@ -988,7 +992,7 @@ def provider_extract(blocks: list[Block], configuration: Settings) -> list[Extra
         try:
             value, context = validate_fact(
                 fact.field,
-                json.loads(fact.value_json),
+                bounded_json(fact.value_json.encode()),
                 fact.context.model_dump(mode="json", exclude_none=True),
             )
         except (ValueError, TypeError):
