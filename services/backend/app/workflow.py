@@ -4,7 +4,7 @@ import re
 from collections import defaultdict
 from datetime import date
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 import sqlalchemy as sa
@@ -37,10 +37,12 @@ from app.domain.models import (
 from app.identity import Scope
 
 
-def get[T](session: Session, model: type[T], object_id: UUID, *, lock: bool = False) -> T:
+def get[T](
+    session: Session, model: type[T], object_id: UUID, *, lock: bool | Literal["shared"] = False
+) -> T:
     statement = sa.select(model).where(getattr(model, "id") == object_id)  # noqa: B009
     if lock:
-        statement = statement.with_for_update()
+        statement = statement.with_for_update(read=lock == "shared")
     result = session.scalar(statement)
     if result is None:
         fail(404, "NOT_FOUND", "Record not found in this agency.")

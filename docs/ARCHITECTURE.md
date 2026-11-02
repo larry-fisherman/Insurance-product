@@ -27,17 +27,17 @@ flowchart LR
 
 The diagram shows logical responsibilities. Full Compose parsing runs in a separate credential-free container on a worker-only internal network; native tests without a parser endpoint retain an in-process fallback. Hosted sandbox acceptance remains open. PostgreSQL holds identity and business data in the same database with separate restricted access paths.
 
-| Area             | Current implementation                                                                                                               |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| Web              | Next.js, React, TypeScript; separate `apps/web` operations and `apps/marketing` public builds; operations-only same-origin API proxy |
-| API              | FastAPI in `services/backend/app`; strict Pydantic contracts; session-derived tenant scope                                           |
-| Persistence      | PostgreSQL, SQLAlchemy, Alembic; tenant foreign keys, forced RLS, immutable evidence/review history                                  |
-| Identity         | Local password/TOTP/recovery or server-side OIDC adapter; opaque sessions and context binding; live provider acceptance pending      |
-| Async processing | Celery/Redis, database jobs/outbox, scheduler, bounded attempts and expiring leases                                                  |
-| Files            | Private shared filesystem for local Compose; configured S3 adapter with version-addressed access, pending hosted validation          |
-| Intake           | Quarantine/ClamAV, bounded pypdf/openpyxl parsing, PDFium/Tesseract OCR                                                              |
-| Extraction       | Explicit-label parser by default; optional OpenAI Responses and approved HTTPS gateway adapters                                      |
-| Output           | ReportLab/openpyxl original PDF/XLSX and supporting ZIP; deterministic narrative and sealed manifests                                |
+| Area             | Current implementation                                                                                                                       |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Web              | Next.js, React, TypeScript; separate `apps/web` operations and `apps/marketing` public builds; operations-only same-origin API proxy         |
+| API              | FastAPI in `services/backend/app`; strict Pydantic contracts; session-derived tenant scope                                                   |
+| Persistence      | PostgreSQL, SQLAlchemy, Alembic; tenant foreign keys, forced RLS, immutable evidence/review history                                          |
+| Identity         | Local password/TOTP/recovery or server-side OIDC adapter; opaque sessions and context binding; live provider acceptance pending              |
+| Async processing | Celery/Redis, database jobs/outbox, scheduler, bounded attempts and expiring leases                                                          |
+| Files            | Private shared filesystem for local Compose; configured S3 version-addressed reads; writes gated on distributed quotas and hosted validation |
+| Intake           | Quarantine/ClamAV, bounded pypdf/openpyxl parsing, PDFium/Tesseract OCR                                                                      |
+| Extraction       | Explicit-label parser by default; optional OpenAI Responses and approved HTTPS gateway adapters                                              |
+| Output           | ReportLab/openpyxl original PDF/XLSX and supporting ZIP; deterministic narrative and sealed manifests                                        |
 
 `compose.full.yaml` runs the review product, `compose.database.yaml` provisions local PostgreSQL, and `compose.yaml` is a health-shell smoke setup. Staging, production, and non-synthetic mode fail closed.
 
@@ -102,3 +102,7 @@ Local backup/restore, queue recovery, and configuration procedures are in [opera
 ## Web platform expansion
 
 [ADR 0004](decisions/0004-web-platform.md) records the independent runtime/network boundaries, OIDC flow, agency activation, manual subscription model, resumable intake and parser isolation. [Web platform operations](web-platform-operations.md) documents routes, configuration, local deviations and open acceptance. Marketing runs without operations credentials; inquiry storage defaults to a separate local SQLite volume and supports a dedicated PostgreSQL URL. No hosted or payment service is connected by this change.
+
+Local filesystem writes now serialize retained-byte/entry admission across API and worker processes sharing the private volume. This covers abandoned and rollback-created objects without relying on rolled-back database counters; cleanup and a distributed storage coordinator remain open. See [ADR 0006](decisions/0006-local-storage-capacity.md).
+
+Workspace detail reads hold a shared submission-row lock while assembling version, facts and review state, coordinating with input/review writers. The browser suppresses superseded polling responses and clears data from a prior route. This prevents mixed optimistic-version snapshots without weakening stale-write rejection; see audit finding [A12](WEB_PLATFORM_AUDIT.md#a12--p2-concurrent-workspace-reads-could-mix-facts-with-an-older-version).

@@ -12,33 +12,60 @@ import { api, ApiError, label } from "../../lib/workspace-api";
 
 export function useResource<T>(path: string, poll = false) {
   const router = useRouter();
-  const [data, setData] = useState<T | null>(null);
-  const [error, setError] = useState("");
+  const [state, setState] = useState<{ path: string; data: T | null; error: string }>({
+    path,
+    data: null,
+    error: "",
+  });
+  const requestSequence = useRef(0);
+  const activePath = useRef<string | null>(path);
+  const inFlight = useRef(false);
   const refresh = useCallback(async () => {
+    if (activePath.current !== path) return;
+    const request = ++requestSequence.current;
+    inFlight.current = true;
     try {
       const result = await api<T>(path);
-      setData(result);
-      setError("");
+      if (request !== requestSequence.current) return;
+      setState({ path, data: result, error: "" });
     } catch (error) {
+      if (request !== requestSequence.current) return;
       if (error instanceof ApiError && error.status === 401) {
         router.push("/login");
         return;
       }
-      setError(error instanceof Error ? error.message : "Unable to load this page.");
+      setState((previous) => ({
+        path,
+        data: previous.path === path ? previous.data : null,
+        error: error instanceof Error ? error.message : "Unable to load this page.",
+      }));
+    } finally {
+      if (request === requestSequence.current) inFlight.current = false;
     }
   }, [path, router]);
   useEffect(() => {
     // refresh awaits the network before updating state.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    activePath.current = path;
     void refresh();
-    if (poll) {
-      const timer = setInterval(() => {
-        if (!document.hidden) void refresh();
-      }, 3000);
-      return () => clearInterval(timer);
-    }
-  }, [refresh, poll]);
-  return { data, error, refresh };
+    const timer = poll
+      ? setInterval(() => {
+          if (!document.hidden && !inFlight.current) void refresh();
+        }, 3000)
+      : undefined;
+    return () => {
+      // A previous poll/path must never overwrite a newer post-save refresh or
+      // redirect an unmounted workspace after its request eventually finishes.
+      requestSequence.current += 1;
+      activePath.current = null;
+      inFlight.current = false;
+      if (timer !== undefined) clearInterval(timer);
+    };
+  }, [refresh, poll, path]);
+  return {
+    data: state.path === path ? state.data : null,
+    error: state.path === path ? state.error : "",
+    refresh,
+  };
 }
 export function Notice({
   children,

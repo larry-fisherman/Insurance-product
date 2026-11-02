@@ -16,6 +16,7 @@ from starlette.responses import JSONResponse, Response
 from app.config import Settings
 from app.database.runtime import Database
 from app.limiting import Limiter
+from app.storage import StorageCapacityError
 
 APP_VERSION = version("cgl-api")
 
@@ -61,6 +62,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.ready = False
     app.state.database = Database(configuration) if configuration.runtime_database_url else None
     app.state.limiter = Limiter(configuration)
+
+    @app.exception_handler(StorageCapacityError)
+    async def storage_capacity_error(request: Request, error: StorageCapacityError) -> JSONResponse:
+        return JSONResponse(
+            status_code=503 if error.code == "STORAGE_QUOTA_UNAVAILABLE" else 507,
+            content={
+                "detail": {
+                    "code": error.code,
+                    "message": "Private storage cannot accept more files. Contact your administrator before retrying.",
+                }
+            },
+        )
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(request: Request, error: RequestValidationError) -> JSONResponse:

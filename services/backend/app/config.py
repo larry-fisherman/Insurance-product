@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import SecretStr, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     synthetic_only: bool = True
     storage_backend: Literal["s3", "filesystem"] = "filesystem"
     storage_path: Path = Path(".data/objects")
+    storage_tenant_byte_limit: int = Field(default=2 * 1024**3, gt=0)
+    storage_total_byte_limit: int = Field(default=20 * 1024**3, gt=0)
+    storage_entry_limit: int = Field(default=100_000, gt=0)
     s3_endpoint: str | None = None
     s3_bucket: str = "cgl-private"
     s3_access_key: SecretStr | None = None

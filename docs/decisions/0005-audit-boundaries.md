@@ -23,3 +23,9 @@ Configured gateways must return uncompressed bounded JSON. Limit failures produc
 Retained upload reservations and cleanup are deliberately still open. Removing parts inside a business transaction alone is insufficient: storage cannot roll back with PostgreSQL, finalization and cleanup can race, and crash-created orphans need durable accounting. The next change must cover retained/in-flight quotas and retry/crash handling without erasing original documents or approved artifacts.
 
 No customer-data, public deployment, payment/provider-spend or external messaging authorization follows from these corrections.
+
+## Snapshot consistency follow-up — November 2, 2026
+
+A12 was reproduced while verifying the fixes: a read-committed workspace response combined the previous row version with newer reviewed facts. Workspace detail reads now hold a shared submission-row lock while assembling the response. Existing source/review/package writers must continue locking that submission exclusively before changing its reviewed inputs. This narrow coordination avoids changing the isolation level of unrelated operations. Reads may wait for a writer; concurrent readers can share the lock.
+
+The browser also discards superseded resource responses, suppresses timer polls while a current refresh is pending, and clears prior-route data. These client controls improve consistency; they do not authorize writes or replace server version/fingerprint checks. Late or conflicting review changes still require explicit user review rather than automatic resubmission.

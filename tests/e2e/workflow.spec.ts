@@ -5,6 +5,24 @@ async function agencyGet(page: Page, path: string) {
   return page.request.get(path, { headers: { "X-Agency-Context": me.agency_context } });
 }
 
+async function measuredStage<T>(
+  name: string,
+  timeout: number,
+  action: () => Promise<T>,
+): Promise<T> {
+  const started = performance.now();
+  try {
+    return await test.step(name, action, { timeout });
+  } finally {
+    const durationMs = Math.round(performance.now() - started);
+    test.info().annotations.push({
+      type: "stage-duration",
+      description: `${name}: ${durationMs} ms (budget ${timeout} ms)`,
+    });
+    console.log(`[workflow stage] ${name}: ${durationMs} ms / ${timeout} ms`);
+  }
+}
+
 test.beforeAll(async ({ request }) => {
   await expect
     .poll(
@@ -25,101 +43,163 @@ test("fictional brokerage reviews evidence, approves exact files, and exports", 
 }) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto("/login");
-  await page.getByRole("button", { name: "Open a fictional example" }).click();
-  await expect(page).toHaveURL(/submissions\/[0-9a-f-]+/, { timeout: 90_000 });
-  await expect(
-    page.getByRole("heading", {
-      name: "Lakeshore Design Services LLC",
-      exact: true,
-      level: 1,
-    }),
-  ).toBeVisible();
-  const submissionId = page.url().split("/").at(-1);
-  await expect
-    .poll(
-      async () => {
-        const response = await agencyGet(page, "/api/v1/submissions/" + submissionId);
-        if (!response.ok()) return false;
-        const data = await response.json();
-        return (
-          data.jobs.length === 4 &&
-          data.jobs.every((job: { status: string }) => job.status === "completed")
-        );
-      },
-      { timeout: 90_000 },
-    )
-    .toBe(true);
-  await page.getByRole("button", { name: /Data & discrepancies/ }).click();
-  await expect(
-    page.getByText("Local parser · requires broker verification").first(),
-  ).toBeVisible({ timeout: 90_000 });
-  // The UI offers choices rather than silently selecting a conflicting estimate.
-  const sales = page
-    .locator(".review-card")
-    .filter({ has: page.getByRole("heading", { name: "Exposure", exact: true }) });
-  await expect(sales.getByText("conflict", { exact: true })).toBeVisible();
-  await expect(sales.locator("input[type=radio]:checked")).toHaveCount(0);
-  await page.getByText("View cited PDF page", { exact: true }).first().click();
-  await expect(page.locator("iframe[title^='Cited page']").first()).toBeVisible();
-  const citedPdf = await page
-    .locator("iframe[title^='Cited page']")
-    .first()
-    .getAttribute("src");
-  expect(citedPdf).toContain("inline=true");
-  expect(citedPdf).toContain("agency_context=");
-  expect(citedPdf).toContain("#page=");
-  const citedResponse = await page.request.get(citedPdf!.split("#")[0]);
-  expect(citedResponse.headers()["content-disposition"]).toContain("inline");
-  await page.getByText("View cited spreadsheet cells", { exact: true }).first().click();
-  await expect(
-    page.getByRole("columnheader", { name: "Cell", exact: true }).first(),
-  ).toBeVisible();
-  let count = await page.locator(".review-card").count();
-  for (let step = 0; step < 50 && count > 0; step++) {
-    const card = page.locator(".review-card").first();
-    await card.getByRole("radio").first().check();
-    await card
-      .getByRole("textbox", { name: /Review note|Resolution reason/ })
-      .fill(
-        "Synthetic browser test: source reviewed; selected estimate confirmed by the fictional insured.",
-      );
-    await card.getByRole("button", { name: "Save verified value", exact: true }).click();
-    await expect(page.locator(".review-card")).toHaveCount(count - 1);
-    count--;
-  }
-  await page.getByRole("button", { name: "Package & approval", exact: true }).click();
-  await expect(
-    page.getByRole("button", { name: "Generate submission package" }),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "Generate submission package" }).click();
-  await expect(page.getByRole("link", { name: "Preview PDF" }).first()).toBeVisible({
-    timeout: 90_000,
+  // Independent stage budgets expose latency failures; other tests keep the
+  // suite default. The previous 120-second whole-case budget competed with
+  // several individual 90-second waits (audit A11).
+  // Budgets allow headroom above the measured November 2 local run:
+  // approximately 6 / 20 / 31 / 7 / 2 / 2 seconds respectively.
+  const budgets = {
+    open: 20_000,
+    processing: 60_000,
+    review: 60_000,
+    generation: 30_000,
+    approval: 15_000,
+    export: 15_000,
+  };
+  test.setTimeout(Object.values(budgets).reduce((total, value) => total + value, 0));
+  const submissionId = await measuredStage(
+    "Open fictional workspace",
+    budgets.open,
+    async () => {
+      await page.goto("/login");
+      await page.getByRole("button", { name: "Open a fictional example" }).click();
+      await expect(page).toHaveURL(/submissions\/[0-9a-f-]+/, { timeout: 90_000 });
+      await expect(
+        page.getByRole("heading", {
+          name: "Lakeshore Design Services LLC",
+          exact: true,
+          level: 1,
+        }),
+      ).toBeVisible();
+      return page.url().split("/").at(-1);
+    },
+  );
+  await measuredStage("Process four source documents", budgets.processing, async () => {
+    await expect
+      .poll(
+        async () => {
+          const response = await agencyGet(page, "/api/v1/submissions/" + submissionId);
+          if (!response.ok()) return false;
+          const data = await response.json();
+          return (
+            data.jobs.length === 4 &&
+            data.jobs.every((job: { status: string }) => job.status === "completed")
+          );
+        },
+        { timeout: 90_000 },
+      )
+      .toBe(true);
   });
-  await expect(page.getByRole("link", { name: "Export PDF" })).toHaveCount(0);
-  await page
-    .getByRole("checkbox", {
-      name: "I reviewed the candidate files, source evidence, and documented exceptions.",
-    })
-    .check();
-  await page
-    .getByRole("textbox", { name: "Final approval attestation" })
-    .fill(
-      "I reviewed these exact fictional submission files and documented exceptions and approve the synthetic package for test export.",
-    );
-  await page.getByRole("button", { name: "Approve this exact package" }).click();
-  const exported = page.getByRole("link", { name: "Export PDF" }).first();
-  await expect(exported).toBeVisible();
-  const response = await page.request.get((await exported.getAttribute("href"))!);
-  expect(response.status()).toBe(200);
-  expect((await response.body()).subarray(0, 4).toString()).toBe("%PDF");
-  await expect(
-    page.locator(".page-heading").getByText("approved", { exact: true }),
-  ).toBeVisible();
-  await page.evaluate(() => window.scrollTo(0, 0));
-  await page.screenshot({ path: ".artifacts/approved-workspace.png", fullPage: true });
-  await page.getByRole("button", { name: "History", exact: true }).click();
-  await expect(page.getByText("package approved", { exact: true })).toBeVisible();
+  await measuredStage("Review evidence and reconcile facts", budgets.review, async () => {
+    await page.getByRole("button", { name: /Data & discrepancies/ }).click();
+    await expect(
+      page.getByText("Local parser · requires broker verification").first(),
+    ).toBeVisible({ timeout: 90_000 });
+    // The UI offers choices rather than silently selecting a conflicting estimate.
+    const sales = page
+      .locator(".review-card")
+      .filter({ has: page.getByRole("heading", { name: "Exposure", exact: true }) });
+    await expect(sales.getByText("conflict", { exact: true })).toBeVisible();
+    await expect(sales.locator("input[type=radio]:checked")).toHaveCount(0);
+    await page.getByText("View cited PDF page", { exact: true }).first().click();
+    await expect(page.locator("iframe[title^='Cited page']").first()).toBeVisible();
+    const citedPdf = await page
+      .locator("iframe[title^='Cited page']")
+      .first()
+      .getAttribute("src");
+    expect(citedPdf).toContain("inline=true");
+    expect(citedPdf).toContain("agency_context=");
+    expect(citedPdf).toContain("#page=");
+    const citedResponse = await page.request.get(citedPdf!.split("#")[0]);
+    expect(citedResponse.headers()["content-disposition"]).toContain("inline");
+    await page.getByText("View cited spreadsheet cells", { exact: true }).first().click();
+    await expect(
+      page.getByRole("columnheader", { name: "Cell", exact: true }).first(),
+    ).toBeVisible();
+    let count = await page.locator(".review-card").count();
+    for (let step = 0; step < 50 && count > 0; step++) {
+      const card = page.locator(".review-card").first();
+      await card.getByRole("radio").first().check();
+      await card
+        .getByRole("textbox", { name: /Review note|Resolution reason/ })
+        .fill(
+          "Synthetic browser test: source reviewed; selected estimate confirmed by the fictional insured.",
+        );
+      await card
+        .getByRole("button", { name: "Save verified value", exact: true })
+        .click();
+      await expect(page.locator(".review-card")).toHaveCount(count - 1);
+      count--;
+    }
+  });
+  await measuredStage("Generate candidate package", budgets.generation, async () => {
+    await page.getByRole("button", { name: "Package & approval", exact: true }).click();
+    await expect(
+      page.getByRole("button", { name: "Generate submission package" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Generate submission package" }).click();
+    await expect(page.getByRole("link", { name: "Preview PDF" }).first()).toBeVisible({
+      timeout: 90_000,
+    });
+    await expect(page.getByRole("link", { name: "Export PDF" })).toHaveCount(0);
+  });
+  const approvedBytes = await measuredStage(
+    "Approve and inspect the exact PDF",
+    budgets.approval,
+    async () => {
+      await page
+        .getByRole("checkbox", {
+          name: "I reviewed the candidate files, source evidence, and documented exceptions.",
+        })
+        .check();
+      await page
+        .getByRole("textbox", { name: "Final approval attestation" })
+        .fill(
+          "I reviewed these exact fictional submission files and documented exceptions and approve the synthetic package for test export.",
+        );
+      await page.getByRole("button", { name: "Approve this exact package" }).click();
+      const exported = page.getByRole("link", { name: "Export PDF" }).first();
+      await expect(exported).toBeVisible();
+      await expect(
+        page.locator(".page-heading").getByText("approved", { exact: true }),
+      ).toBeVisible();
+      const preview = await page.request.get(
+        (await page
+          .getByRole("link", { name: "Preview PDF" })
+          .first()
+          .getAttribute("href"))!,
+      );
+      expect(preview.status()).toBe(200);
+      const bytes = await preview.body();
+      expect(bytes.subarray(0, 4).toString()).toBe("%PDF");
+      return bytes;
+    },
+  );
+  await measuredStage(
+    "Export identical bytes and verify history",
+    budgets.export,
+    async () => {
+      const response = await page.request.get(
+        (await page
+          .getByRole("link", { name: "Export PDF" })
+          .first()
+          .getAttribute("href"))!,
+      );
+      expect(response.status()).toBe(200);
+      expect(await response.body()).toEqual(approvedBytes);
+      await expect(
+        page.locator(".page-heading").getByText("exported", { exact: true }),
+      ).toBeVisible();
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await page.screenshot({
+        path: ".artifacts/exported-workspace.png",
+        fullPage: true,
+      });
+      await page.getByRole("button", { name: "History", exact: true }).click();
+      await expect(page.getByText("package approved", { exact: true })).toBeVisible();
+      await expect(page.getByText("package exported", { exact: true })).toBeVisible();
+    },
+  );
   expect(errors).toEqual([]);
 });
 

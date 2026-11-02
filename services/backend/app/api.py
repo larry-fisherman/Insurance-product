@@ -523,7 +523,9 @@ def transition_submission(
 @router.get("/submissions/{submission_id}", response_model=WorkspaceResponse)
 def workspace(submission_id: UUID, scope: Scoped) -> dict[str, Any]:
     scope.require("submissions.read")
-    submission = get(scope.session, Submission, submission_id)
+    # Keep the optimistic version and reviewed facts from the same logical
+    # state. Writers lock this row before changing review/source/package inputs.
+    submission = get(scope.session, Submission, submission_id, lock="shared")
     state = readiness(scope.session, submission)
     documents = scope.session.scalars(
         sa.select(DocumentVersion)

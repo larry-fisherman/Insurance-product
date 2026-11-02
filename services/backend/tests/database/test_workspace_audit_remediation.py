@@ -18,16 +18,109 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from sqlalchemy.engine import Connection, Engine
 from test_workspace import client as client
-from test_workspace import post, reviewed_workspace
+from test_workspace import demo, post, reviewed_workspace
 from test_workspace import workspace_settings as workspace_settings
 
 from app import identity, oidc
-from app.common import now
+from app.common import digest, now
 from app.config import Settings
 from app.database.models import AuthSession
+from app.database.runtime import Database
 from app.domain.cgl import RULE_VERSION, SCHEMA_VERSION
-from app.domain.models import CanonicalRevision, Discrepancy
+from app.domain.models import CanonicalRevision, Discrepancy, Submission
 from app.main import create_app
+
+
+def test_aborted_uploads_still_consume_retained_storage_capacity(
+    client: TestClient, workspace_settings: Settings
+) -> None:
+    submission, actor = demo(client)
+    tenant_root = workspace_settings.storage_path / "tenants" / actor["tenant_id"]
+    baseline = sum(path.stat().st_size for path in tenant_root.rglob("*") if path.is_file())
+    body = b"fictional quota regression bytes"
+    workspace_settings.storage_tenant_byte_limit = baseline + len(body) * 2
+    for attempt in range(3):
+        initialized = post(
+            client,
+            f"/submissions/{submission}/uploads",
+            {
+                "filename": "fictional.pdf",
+                "sha256": digest(body),
+                "byte_size": len(body),
+            },
+        )
+        assert initialized.status_code == 201
+        upload_id = initialized.json()["id"]
+        response = client.put(
+            f"/api/v1/uploads/{upload_id}/parts/0",
+            content=body,
+            headers={"X-CSRF-Token": client.cookies.get("cgl_csrf", "") or ""},
+        )
+        if attempt < 2:
+            assert response.status_code == 200
+            assert post(client, f"/uploads/{upload_id}/abort", {}).status_code == 200
+        else:
+            assert response.status_code == 507
+            assert response.json()["detail"]["code"] == "STORAGE_CAPACITY_REACHED"
+    assert (
+        sum(path.stat().st_size for path in tenant_root.rglob("*") if path.is_file())
+        == baseline + len(body) * 2
+    )
+
+
+def test_workspace_snapshot_blocks_concurrent_version_changes_until_response_assembled(
+    client: TestClient, workspace_settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from sqlalchemy.exc import DBAPIError
+    from sqlalchemy.orm import Session
+
+    from app import api
+    from app.workflow import readiness as original
+
+    submission_id, actor = demo(client)
+    entered, release = threading.Event(), threading.Event()
+
+    def paused_readiness(session: Session, submission: Submission) -> dict[str, Any]:
+        entered.set()
+        assert release.wait(timeout=15)
+        return original(session, submission)
+
+    monkeypatch.setattr(api, "readiness", paused_readiness)
+    database = Database(workspace_settings)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pending = pool.submit(client.get, "/api/v1/submissions/" + submission_id)
+            try:
+                assert entered.wait(timeout=15)
+                with (
+                    pytest.raises(DBAPIError) as caught,
+                    database.tenant(UUID(actor["tenant_id"]), UUID(actor["user_id"])) as session,
+                ):
+                    session.execute(sa.text("SET LOCAL lock_timeout = '100ms'"))
+                    session.execute(
+                        sa.update(Submission)
+                        .where(Submission.id == UUID(submission_id))
+                        .values(row_version=Submission.row_version + 1)
+                    )
+                assert getattr(caught.value.orig, "sqlstate", None) == "55P03"
+            finally:
+                release.set()
+            result = pending.result(timeout=15)
+            assert result.status_code == 200
+        # Once the snapshot transaction ends, the next writer can proceed.
+        with database.tenant(UUID(actor["tenant_id"]), UUID(actor["user_id"])) as session:
+            session.execute(sa.text("SET LOCAL lock_timeout = '1s'"))
+            session.execute(
+                sa.update(Submission)
+                .where(Submission.id == UUID(submission_id))
+                .values(row_version=Submission.row_version + 1)
+            )
+    finally:
+        database.close()
+
 
 pytestmark = pytest.mark.database
 

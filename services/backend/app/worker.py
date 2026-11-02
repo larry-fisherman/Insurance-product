@@ -48,7 +48,7 @@ from app.domain.models import (
 from app.parser_client import parse_document
 from app.platform_models import Subscription
 from app.rendering import render
-from app.storage import storage
+from app.storage import StorageCapacityError, storage
 from app.workflow import active_documents, get, refresh_issues
 
 
@@ -495,7 +495,11 @@ def process_job(configuration: Settings, tenant_id: UUID, user_id: UUID, job_id:
         else:
             raise DocumentError("UNKNOWN_JOB")
     except Exception as error:
-        code = error.code if isinstance(error, DocumentError) else "PROCESSING_FAILED"
+        code = (
+            error.code
+            if isinstance(error, (DocumentError, StorageCapacityError))
+            else "PROCESSING_FAILED"
+        )
         logging.getLogger("cgl.processing").warning(
             "job_failed job_id=%s code=%s exception_type=%s attempt=%s",
             job_id,

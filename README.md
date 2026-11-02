@@ -53,7 +53,7 @@ See [docs/review-guide.md](docs/review-guide.md) for expected behavior and limit
 - FastAPI application; PostgreSQL stores identity, tenant records, immutable evidence, review revisions, and approvals.
 - Separate non-owner `cgl_auth` and `cgl_runtime` connections; forced PostgreSQL RLS plus transaction-local tenant/user scope for business records.
 - Celery/Redis processes long-running documents and packages. A transactional outbox and expiring leases recover lost messages and crashed workers.
-- Private shared filesystem storage for the portable local stack. An S3 adapter supports private, version-addressed objects when configured; hosted S3 validation is an external gate.
+- Private shared filesystem storage with retained-byte/entry limits for the portable local stack. S3 version-addressed reads remain available; new S3 writes fail closed pending distributed quota enforcement and hosted validation. See [storage controls](docs/web-platform-operations.md#local-storage-capacity-controls).
 - ClamAV quarantines normal uploads; pypdf/openpyxl parse bounded inputs; Tesseract/PDFium handles scanned pages in bounded workers.
 - Strict CGL validation and deterministic reconciliation. The default extractor is an explicit-label parser, **not an LLM**. Optional OpenAI Responses and approved HTTPS gateway adapters are included; no paid provider calls are made automatically.
 - ReportLab and openpyxl generate original submission templates. ZIP exports include supporting documents, an index/manifest, and the reviewed snapshot.
