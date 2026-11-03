@@ -32,13 +32,36 @@ from app.main import create_app
 
 
 def test_aborted_uploads_still_consume_retained_storage_capacity(
-    client: TestClient, workspace_settings: Settings
+    client: TestClient, workspace_settings: Settings, database_engine: Engine
 ) -> None:
+    from app.platform_models import StorageLimit, StorageUsage
+
     submission, actor = demo(client)
     tenant_root = workspace_settings.storage_path / "tenants" / actor["tenant_id"]
     baseline = sum(path.stat().st_size for path in tenant_root.rglob("*") if path.is_file())
     body = b"fictional quota regression bytes"
-    workspace_settings.storage_tenant_byte_limit = baseline + len(body) * 2
+    # Limits live in the migration-managed table (ADR 0008); restore it afterwards.
+    with database_engine.begin() as connection:
+        usage = connection.execute(
+            sa.select(StorageUsage).where(StorageUsage.tenant_id == UUID(actor["tenant_id"]))
+        ).one()
+        assert usage.reserved_bytes + usage.committed_bytes == baseline
+        previous = connection.scalar(sa.select(StorageLimit.tenant_byte_limit))
+        connection.execute(
+            sa.update(StorageLimit).values(tenant_byte_limit=baseline + len(body) * 2)
+        )
+    try:
+        attempts(client, submission, body)
+    finally:
+        with database_engine.begin() as connection:
+            connection.execute(sa.update(StorageLimit).values(tenant_byte_limit=previous))
+    assert (
+        sum(path.stat().st_size for path in tenant_root.rglob("*") if path.is_file())
+        == baseline + len(body) * 2
+    )
+
+
+def attempts(client: TestClient, submission: str, body: bytes) -> None:
     for attempt in range(3):
         initialized = post(
             client,
@@ -62,10 +85,6 @@ def test_aborted_uploads_still_consume_retained_storage_capacity(
         else:
             assert response.status_code == 507
             assert response.json()["detail"]["code"] == "STORAGE_CAPACITY_REACHED"
-    assert (
-        sum(path.stat().st_size for path in tenant_root.rglob("*") if path.is_file())
-        == baseline + len(body) * 2
-    )
 
 
 def test_workspace_snapshot_blocks_concurrent_version_changes_until_response_assembled(

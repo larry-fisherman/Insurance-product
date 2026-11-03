@@ -179,6 +179,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from app.demo import router as demo_router
     from app.identity import router as identity_router
     from app.oidc import router as oidc_router
+    from app.orphan_cleanup import router as orphan_cleanup_router
     from app.platform import router as platform_router
     from app.upload_cleanup import router as upload_cleanup_router
     from app.uploads import router as uploads_router
@@ -187,6 +188,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(platform_router)
     app.include_router(uploads_router)
     app.include_router(upload_cleanup_router)
+    app.include_router(orphan_cleanup_router)
     app.include_router(identity_router)
     app.include_router(workflow_router)
     app.include_router(demo_router)

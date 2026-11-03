@@ -24,7 +24,7 @@ The committed intent survives a crash or rollback after deletion. Retrying the s
 
 This first increment is an authenticated maintenance API without a settings screen, candidate queue or scheduled collector. Operators need the upload ID and must retain the returned plan ID/idempotency key for recovery. Batches are bounded; large retry-orphan directories may need additional plans. Unexpected filesystem content requires investigation, not a broader recursive deletion command.
 
-Orphans in document/artifact trees and directories without known upload sessions are excluded. Safe collection of those objects needs durable write intents and reference/lease reconciliation. Distributed quotas, S3 uncertain-write reconciliation, category retention, tenant-wide legal holds/offboarding, provider erasure, backup expiry and restored-backup enforcement remain open. No S3 write or customer-data gate changes.
+Orphans in document/artifact trees and directories without known upload sessions are excluded here. [ADR 0008](0008-storage-reservations-and-orphan-cleanup.md) adds durable write intents (storage reservations) and a separate explicit cleanup for reservation-backed orphans; completing a plan under this ADR now also releases the cleaned parts' reservations, or pre-ledger baseline bytes, exactly once. Legacy pre-ledger orphans remain report-only. Distributed quotas, S3 uncertain-write reconciliation, category retention, tenant-wide legal holds/offboarding, provider erasure, backup expiry and restored-backup enforcement remain open. No S3 write or customer-data gate changes.
 
 ## Verification
 

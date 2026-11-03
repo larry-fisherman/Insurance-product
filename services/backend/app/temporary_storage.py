@@ -1,5 +1,12 @@
-"""Bounded local upload-part inspection/deletion; never walks document/artifact trees."""
+"""Bounded local inspection/deletion of planned objects; never walks or recurses trees.
 
+Upload-part cleanup (ADR 0007) is bounded to one known upload directory. Orphan
+cleanup (ADR 0008) addresses individual reservation-backed keys only, with the
+same fail-closed rules: no symlinks, single-link regular files, bounded size.
+"""
+
+import contextlib
+import hashlib
 import os
 import re
 import stat
@@ -117,4 +124,104 @@ def remove_planned(
             "removed_objects": len(present),
             "removed_bytes": sum(item.byte_size for item in present),
             "already_absent_objects": len(objects) - len(present),
+        }
+
+
+class ReservedObject(BaseModel):
+    """Plan-time inventory of one reservation's object (absent if never written)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    reservation_id: UUID
+    present: bool
+    byte_size: int = Field(ge=0)
+    sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    mtime_ns: int | None = None
+
+
+def object_path(store: FileStore, key: str) -> Path:
+    """Resolve a validated key, refusing symlinked or non-directory ancestors."""
+    store.path(key)  # Validates the server-generated key pattern.
+    directory = store.root
+    *parents, name = key.split("/")
+    for component in parents:
+        directory = directory / component
+        try:
+            mode = directory.lstat().st_mode
+        except FileNotFoundError:
+            continue
+        if not stat.S_ISDIR(mode):
+            raise TemporaryStorageError()
+    return directory / name
+
+
+def inspect_reserved(
+    store: FileStore, key: str, reservation: UUID, max_bytes: int, not_after: datetime
+) -> ReservedObject:
+    path = object_path(store, key)
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return ReservedObject(reservation_id=reservation, present=False, byte_size=0)
+    with os.fdopen(fd, "rb") as source:
+        metadata = os.fstat(source.fileno())
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or metadata.st_size > max_bytes
+            # Writers refuse after their reservation's deadline; a later write is unexplained.
+            or metadata.st_mtime > not_after.timestamp()
+        ):
+            raise TemporaryStorageError()
+        checksum, size = hashlib.sha256(), 0
+        while chunk := source.read(min(1024 * 1024, max_bytes - size + 1)):
+            checksum.update(chunk)
+            size += len(chunk)
+            if size > max_bytes:
+                raise TemporaryStorageError()
+        if size != metadata.st_size:
+            raise TemporaryStorageError()
+    return ReservedObject(
+        reservation_id=reservation,
+        present=True,
+        byte_size=size,
+        sha256=checksum.hexdigest(),
+        mtime_ns=metadata.st_mtime_ns,
+    )
+
+
+def inventory_reserved(
+    store: FileStore, items: list[tuple[str, UUID, int, datetime]]
+) -> list[ReservedObject]:
+    with store.write_lock():
+        return [inspect_reserved(store, *item) for item in items]
+
+
+def remove_reserved(
+    store: FileStore, items: list[tuple[str, int, datetime, ReservedObject]]
+) -> dict[str, int]:
+    """Validate the whole planned batch under the storage lock, then unlink."""
+    if not 1 <= len(items) <= MAX_CLEANUP_OBJECTS or len({key for key, *_ in items}) != len(items):
+        raise TemporaryStorageError()
+    with store.write_lock():
+        present: list[tuple[str, ReservedObject]] = []
+        absent = 0
+        for key, max_bytes, not_after, expected in items:
+            actual = inspect_reserved(store, key, expected.reservation_id, max_bytes, not_after)
+            if not actual.present:
+                absent += 1  # Never written, or removed by an earlier crashed attempt.
+                continue
+            if actual != expected:
+                raise TemporaryStorageError()
+            present.append((key, actual))
+        for key, _ in present:
+            path = object_path(store, key)
+            path.unlink()
+            # Only the now-empty exact object directory; never remove recursively.
+            with contextlib.suppress(OSError):
+                path.parent.rmdir()
+        return {
+            "removed_objects": len(present),
+            "removed_bytes": sum(item.byte_size for _, item in present),
+            "already_absent_objects": absent,
+            "planned_absent_objects": sum(1 for *_, expected in items if not expected.present),
         }

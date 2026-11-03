@@ -9,6 +9,7 @@ import sqlalchemy as sa
 from celery import Celery
 from sqlalchemy.orm import Session
 
+from app import storage_quota
 from app.common import canonical_json, digest, now
 from app.config import Settings
 from app.database.models import (
@@ -72,7 +73,14 @@ def celery_app() -> Celery:
         task_time_limit=600,
         broker_connection_retry_on_startup=True,
         broker_transport_options={"visibility_timeout": 900},
-        beat_schedule={"recover-and-dispatch": {"task": "cgl.dispatch", "schedule": 5.0}},
+        beat_schedule={
+            "recover-and-dispatch": {"task": "cgl.dispatch", "schedule": 5.0},
+            # Report-only (ADR 0008): counts orphans/drift, never deletes.
+            "storage-sweep": {
+                "task": "cgl.storage_sweep",
+                "schedule": float(configuration.storage_sweep_interval_seconds),
+            },
+        },
     )
     return application
 
@@ -145,6 +153,13 @@ def dispatch() -> None:
                         process_task.delay(str(tenant_id), str(user_id), str(job.id))
     finally:
         db.close()
+
+
+@celery.task(name="cgl.storage_sweep")  # type: ignore[untyped-decorator]
+def storage_sweep() -> None:
+    from app.storage_sweep import run
+
+    run(Settings())
 
 
 @celery.task(name="cgl.process")  # type: ignore[untyped-decorator]
@@ -450,10 +465,23 @@ def process_job(configuration: Settings, tenant_id: UUID, user_id: UUID, job_id:
                 if len(evidence) != len(source_ids):
                     raise DocumentError("EVIDENCE_NOT_FOUND")
             outputs, manifest = render(snapshot, revision_hash, documents, supporting, evidence)
-            artifacts = []
+            artifacts, reservations = [], []
             for format, (data, filename, media_type) in outputs.items():
-                key = f"tenants/{tenant_id}/artifacts/{uuid4()}/{filename}"
-                version = store.put(key, data, media_type)
+                # One reservation per attempt and format: a lease-lost attempt leaves a
+                # charged, unlinked reservation (an orphan candidate), never a rebind.
+                reservation = storage_quota.reserve(
+                    db.runtime_engine,
+                    configuration,
+                    tenant_id,
+                    user_id,
+                    purpose="artifact",
+                    owner_id=package_id,
+                    slot=f"{claimed_attempt}:{format}",
+                    key=f"tenants/{tenant_id}/artifacts/{uuid4()}/{filename}",
+                    body=data,
+                )
+                version = storage_quota.write(store, reservation, data, media_type)
+                reservations.append(reservation)
                 artifacts.append(
                     PackageArtifact(
                         tenant_id=tenant_id,
@@ -461,7 +489,7 @@ def process_job(configuration: Settings, tenant_id: UUID, user_id: UUID, job_id:
                         format=format,
                         filename=filename,
                         media_type=media_type,
-                        object_key=key,
+                        object_key=reservation.object_key,
                         storage_version=version,
                         sha256=digest(data),
                         byte_size=len(data),
@@ -476,6 +504,9 @@ def process_job(configuration: Settings, tenant_id: UUID, user_id: UUID, job_id:
                 package = get(session, Package, package_id, lock=True)
                 if package.status != "ready" and package.status != "approved":
                     session.add_all(artifacts)
+                    session.flush()
+                    for reservation in reservations:
+                        storage_quota.link(session, reservation)
                     package.manifest, package.manifest_hash = (
                         manifest,
                         digest(canonical_json(manifest)),

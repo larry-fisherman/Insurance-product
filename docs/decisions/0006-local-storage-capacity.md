@@ -18,7 +18,7 @@ S3 writes fail closed until durable distributed reservations, conditional immuta
 
 ## Remaining work
 
-[ADR 0007](0007-temporary-upload-cleanup.md) adds explicit, narrowly scoped cleanup of expired known-session temporary parts and rollback-created part files, with committed intents, upload holds and finalization coordination. Broader unknown-session and document/artifact orphan reconciliation remains open. Preserve original source bytes, package artifacts, approval hashes and metadata. Do not delete the lock file while writers are active. Do not grant runtime blanket database deletion powers.
+[ADR 0007](0007-temporary-upload-cleanup.md) adds explicit, narrowly scoped cleanup of expired known-session temporary parts and rollback-created part files, with committed intents, upload holds and finalization coordination. [ADR 0008](0008-storage-reservations-and-orphan-cleanup.md) replaces this scan as the admission authority with a PostgreSQL reservation ledger and adds explicit cleanup of reservation-backed orphans; the scan survives only for seeding, reconciliation and the report-only sweep. Legacy pre-ledger orphans remain report-only. Preserve original source bytes, package artifacts, approval hashes and metadata. Do not delete the lock file while writers are active. Do not grant runtime blanket database deletion powers.
 
 Hosted storage needs an independently accepted quota/reservation/reconciliation protocol, physical capacity monitoring, workload identities and retention/restore controls. No customer-data or public-deployment gate changes.
 

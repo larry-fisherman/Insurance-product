@@ -8,6 +8,7 @@ import sqlalchemy as sa
 from fastapi import APIRouter, Header, Request
 from pydantic import BaseModel, Field
 
+from app import storage_quota
 from app.common import digest, fail, now, record
 from app.domain.models import DocumentVersion, Submission
 from app.identity import Input, Scoped
@@ -142,8 +143,26 @@ async def put_part(upload_id: UUID, number: int, request: Request, scope: Scoped
             fail(409, "PART_CONFLICT", "This part was already uploaded with different bytes.")
         return response(scope, row)
     # Unique immutable keys avoid replacing any bytes, including after a rolled-back transaction.
-    key = f"tenants/{scope.tenant_id}/uploads/{row.id}/{number}-{uuid4().hex}"
-    version = storage(scope.configuration).put(key, bytes(body), "application/octet-stream")
+    # The reservation commits first (a durable write intent); a retry with identical bytes
+    # reuses it and its key instead of charging twice.
+    try:
+        reservation = storage_quota.reserve(
+            storage_quota.reservation_engine(scope.configuration),
+            scope.configuration,
+            scope.tenant_id,
+            scope.actor.user_id,
+            purpose="upload_part",
+            owner_id=row.id,
+            slot=str(number),
+            key=f"tenants/{scope.tenant_id}/uploads/{row.id}/{number}-{uuid4().hex}",
+            body=bytes(body),
+            created_by=scope.membership_id,
+        )
+    except storage_quota.ReservationConflict:
+        fail(409, "PART_CONFLICT", "This part was already uploaded with different bytes.")
+    version = storage_quota.write(
+        storage(scope.configuration), reservation, bytes(body), "application/octet-stream"
+    )
     scope.session.add(
         UploadPart(
             tenant_id=scope.tenant_id,
@@ -151,11 +170,12 @@ async def put_part(upload_id: UUID, number: int, request: Request, scope: Scoped
             number=number,
             sha256=sha,
             byte_size=len(body),
-            object_key=key,
+            object_key=reservation.object_key,
             storage_version=version,
         )
     )
     scope.session.flush()
+    storage_quota.link(scope.session, reservation)
     return response(scope, row)
 
 

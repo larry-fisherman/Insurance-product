@@ -11,6 +11,7 @@ import sqlalchemy as sa
 from fastapi import APIRouter, File, Form, Header, Query, Request, Response, UploadFile
 from pydantic import Field, model_validator
 
+from app import storage_quota
 from app.common import audit, canonical_json, digest, fail, now, record
 from app.contracts import (
     DocumentResponse,
@@ -629,8 +630,24 @@ def store_document(
             fail(422, "INVALID_DOCUMENT_VERSION", "Replace a document from this submission.")
         previous.excluded_reason = "Superseded by a newer document version"
         previous.excluded_by, previous.excluded_at = scope.actor.user_id, now()
-    key = f"tenants/{scope.tenant_id}/documents/{object_id}/original"
-    version = storage(scope.configuration).put(key, data, media_type)
+    # Reserve (own committed transaction) -> write -> link with the version row below.
+    try:
+        reservation = storage_quota.reserve(
+            storage_quota.reservation_engine(scope.configuration),
+            scope.configuration,
+            scope.tenant_id,
+            scope.actor.user_id,
+            purpose="document",
+            owner_id=object_id,
+            slot="original",
+            key=f"tenants/{scope.tenant_id}/documents/{object_id}/original",
+            body=data,
+            created_by=scope.membership_id,
+        )
+    except storage_quota.ReservationConflict:
+        fail(409, "WRITE_CONFLICT", "This document was already stored with different bytes.")
+    key = reservation.object_key
+    version = storage_quota.write(storage(scope.configuration), reservation, data, media_type)
     row = DocumentVersion(
         id=object_id,
         tenant_id=scope.tenant_id,
@@ -647,6 +664,7 @@ def store_document(
     )
     scope.session.add(row)
     scope.session.flush()
+    storage_quota.link(scope.session, reservation)
     submission.input_version += 1
     submission.row_version += 1
     submission.status = "collecting"

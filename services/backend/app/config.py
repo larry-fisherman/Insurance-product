@@ -37,9 +37,6 @@ class Settings(BaseSettings):
     synthetic_only: bool = True
     storage_backend: Literal["s3", "filesystem"] = "filesystem"
     storage_path: Path = Path(".data/objects")
-    storage_tenant_byte_limit: int = Field(default=2 * 1024**3, gt=0)
-    storage_total_byte_limit: int = Field(default=20 * 1024**3, gt=0)
-    storage_entry_limit: int = Field(default=100_000, gt=0)
     s3_endpoint: str | None = None
     s3_bucket: str = "cgl-private"
     s3_access_key: SecretStr | None = None
@@ -61,6 +58,11 @@ class Settings(BaseSettings):
     oidc_jwks_uri: str | None = None
     marketing_origin: str = "http://127.0.0.1:3001"
     session_idle_minutes: int = 30
+    # Report-only storage sweep (ADR 0008). Grace/TTL are versioned policy constants
+    # in app.upload_cleanup, not settings. "report" is the only supported mode.
+    storage_sweep_mode: Literal["report"] = "report"
+    storage_sweep_interval_seconds: int = Field(default=3600, ge=300, le=86400)
+    storage_sweep_batch: int = Field(default=100, ge=1, le=1000)
 
     @property
     def session_cookie(self) -> str:

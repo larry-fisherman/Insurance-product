@@ -58,3 +58,7 @@ For each material change, record affected requirements, shared/domain ownership,
 ## Approved web-platform implementation
 
 The local implementation now includes independent marketing/operations builds, isolated public intake, an OIDC adapter and controlled activation, onboarding/team management, billing-admin/manual entitlements, resumable intake, session context binding and a credential-free parser container. [Implementation status](web-platform-operations.md) distinguishes these implemented pieces from live provider/payment, retention, hosting and CGL acceptance still required. Existing delivery gates are unchanged.
+
+## Storage reservations and orphan cleanup (A01)
+
+Implemented locally ([ADR 0008](decisions/0008-storage-reservations-and-orphan-cleanup.md)): a PostgreSQL reservation ledger admits every object write, with migration-managed limits; explicit admin cleanup of reservation-backed orphans; release of reservations on known-session upload-part cleanup; a report-only scheduled sweep; and an operator seed/reconcile/report CLI. Future items: agency-admin usage/sweep read endpoints and UI (reports are operator-CLI only for now); a separately reviewed, attested design for deleting legacy pre-ledger orphans; conditional S3 writes behind the ledger once a local S3-compatible service and release evidence exist; tenant deletion, tenant-wide legal holds, category retention and backup/restored-backup enforcement; production service principals for the sweep and workers.

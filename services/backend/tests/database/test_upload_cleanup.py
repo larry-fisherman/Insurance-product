@@ -397,3 +397,97 @@ def test_plan_idempotency_and_retained_reference_guard(
     assert refused.status_code == 409
     assert refused.json()["detail"]["code"] == "UPLOAD_CLEANUP_REFERENCED"
     assert part.exists()
+
+
+def test_completion_releases_reserved_and_pre_ledger_parts_exactly_once(
+    client: TestClient,
+    workspace_settings: Settings,
+    database_engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app import storage_quota
+    from app.database.runtime import Database
+    from app.platform_models import StorageReservation, StorageUsage
+    from app.storage import FileStore
+    from app.storage_admin import reconcile_tenant
+
+    submission, actor = demo(client)
+    tenant, user = UUID(actor["tenant_id"]), UUID(actor["user_id"])
+    identifier = upload(client, submission)  # A linked part (committed reservation).
+    rolled_back = b"fictional reserved part whose request rolled back"
+    reservation = storage_quota.reserve(
+        storage_quota.reservation_engine(workspace_settings),
+        workspace_settings,
+        tenant,
+        user,
+        purpose="upload_part",
+        owner_id=UUID(identifier),
+        slot="1",
+        key=f"tenants/{tenant}/uploads/{identifier}/1-{uuid4().hex}",
+        body=rolled_back,
+    )
+    store = storage(workspace_settings)
+    assert isinstance(store, FileStore)
+    storage_quota.write(store, reservation, rolled_back, "application/octet-stream")
+    legacy = b"fictional pre-ledger part"
+    store.put(
+        f"tenants/{tenant}/uploads/{identifier}/0-{uuid4().hex}",
+        legacy,
+        "application/octet-stream",
+    )
+    db = Database(workspace_settings)
+    try:
+        assert reconcile_tenant(db, store, tenant, user).raised_bytes == len(legacy)
+    finally:
+        db.close()
+
+    def counters() -> tuple[int, int]:
+        with database_engine.connect() as connection:
+            row = connection.execute(
+                sa.select(StorageUsage).where(StorageUsage.tenant_id == tenant)
+            ).one()
+        return int(row.reserved_bytes), int(row.committed_bytes)
+
+    before = counters()
+    age(database_engine, workspace_settings, actor, identifier)
+    planned = plan(client, identifier)
+    assert planned["object_count"] == 3
+    post(
+        client,
+        f"/uploads/{identifier}/cleanup/hold",
+        {**REASON, "held": True, "expected_version": 1},
+    )
+    assert execute(client, identifier, planned).json()["detail"]["code"] == "UPLOAD_CLEANUP_HELD"
+    assert counters() == before  # A hold blocks deletion and release.
+    post(
+        client,
+        f"/uploads/{identifier}/cleanup/hold",
+        {**REASON, "held": False, "expected_version": 2},
+    )
+    original = remove_planned
+
+    def crash(*args: Any, **kwargs: Any) -> dict[str, int]:
+        original(*args, **kwargs)
+        raise RuntimeError("Synthetic crash after unlink before database commit")
+
+    monkeypatch.setattr(upload_cleanup, "remove_planned", crash)
+    with pytest.raises(RuntimeError, match="Synthetic crash"):
+        execute(client, identifier, planned)
+    assert counters() == before  # Nothing released by the rolled-back attempt.
+    monkeypatch.setattr(upload_cleanup, "remove_planned", original)
+    recovered = execute(client, identifier, planned)
+    assert recovered.status_code == 200, recovered.text
+    part_bytes = len(b"fictional part")
+    expected = (before[0] - part_bytes - len(rolled_back), before[1] - len(legacy))
+    assert counters() == expected
+    assert execute(client, identifier, planned).json() == recovered.json()
+    assert counters() == expected  # Replay of a completed plan never releases twice.
+    with database_engine.connect() as connection:
+        states = set(
+            connection.execute(
+                sa.select(StorageReservation.state, StorageReservation.release_ref).where(
+                    StorageReservation.owner_id == UUID(identifier)
+                )
+            )
+        )
+    assert states == {("released", UUID(planned["id"]))}

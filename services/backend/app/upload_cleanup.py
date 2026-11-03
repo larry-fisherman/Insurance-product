@@ -18,6 +18,12 @@ from app.workflow import get, idempotent
 router = APIRouter(prefix="/api/v1/uploads", tags=["temporary upload maintenance"])
 POLICY_VERSION = "local-upload-cleanup-1"
 GRACE = timedelta(hours=24)
+# Reservation-backed storage policy (ADR 0008). Versioned constants, deliberately
+# not settings, so every API/worker process applies the same windows.
+ORPHAN_POLICY_VERSION = "storage-orphan-cleanup-1"
+ORPHAN_GRACE = timedelta(hours=24)  # Well above the 12-minute job lease and 600 s task limit.
+RESERVATION_TTL = timedelta(hours=1)
+WRITE_MARGIN = timedelta(minutes=5)  # Writers refuse once this close to reservation expiry.
 
 
 class CleanupRequest(Input):
@@ -213,7 +219,14 @@ def execute(upload_id: UUID, plan_id: UUID, scope: Scoped) -> CleanupResponse:
             "UPLOAD_CLEANUP_UNSAFE",
             "Cleanup is pending; inspect temporary storage before retrying.",
         )
-    plan.completed_at, plan.completion_summary = now(), summary
+    # Lazy import: storage_quota reads this module's policy constants.
+    from app import storage_quota
+
+    # Every planned object is now absent. One definer call completes the intent and
+    # releases reservation-backed parts by reservation and pre-ledger parts by the
+    # manifest bytes, exactly once (guarded by completed_at IS NULL).
+    released, legacy = storage_quota.release_upload_cleanup(scope.session, plan.id, summary)
+    scope.session.refresh(plan)
     audit(
         scope.session,
         scope.tenant_id,
@@ -221,6 +234,6 @@ def execute(upload_id: UUID, plan_id: UUID, scope: Scoped) -> CleanupResponse:
         "upload.cleanup_completed",
         "upload_cleanup",
         plan.id,
-        summary,
+        {**summary, "released_bytes": released, "released_legacy_bytes": legacy},
     )
     return response(plan)

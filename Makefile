@@ -83,8 +83,18 @@ app-roles:
 	$(UV) run --project $(BACKEND) --frozen python -m app.bootstrap provision
 
 full-up: db-config db-up app-config app-roles db-migrate-native
+	$(FULL_COMPOSE) build api
+	$(MAKE) storage-reconcile
 	$(FULL_COMPOSE) up -d --build redis parser api worker scheduler web inquiries marketing
 	$(FULL_COMPOSE) up -d --wait --wait-timeout 120 redis parser api web inquiries marketing
+
+# Seed/reconcile the storage reservation ledger from the private volume (ADR 0008).
+# Runs as the runtime role inside the API image; it only raises counters.
+storage-reconcile:
+	$(FULL_COMPOSE) run --rm --no-deps api python -m app.storage_admin reconcile
+
+storage-report:
+	$(FULL_COMPOSE) run --rm --no-deps api python -m app.storage_admin report
 
 full-down:
 	$(FULL_COMPOSE) down
@@ -113,7 +123,7 @@ check-e2e:
 verify-ocr:
 	$(FULL_COMPOSE) exec -T worker python - < scripts/verify-ocr.py
 
-.PHONY: full-up full-down scan-up full-logs app-config app-roles evaluate backup-local restore-drill browser-install check-e2e verify-ocr
+.PHONY: full-up full-down storage-reconcile storage-report scan-up full-logs app-config app-roles evaluate backup-local restore-drill browser-install check-e2e verify-ocr
 
 verify-platform:
 	python3 scripts/verify-platform-boundaries.py
