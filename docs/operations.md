@@ -40,6 +40,8 @@ An operator deleting a tenant must first suspend its tenant row through a review
 
 A storage write can outlive a rolled-back database transaction or killed renderer. These orphan objects are private and cannot be downloaded through the API, but consume disk. Before cleanup, stop writers, inventory all document/artifact object keys, compare against the private filesystem/S3 inventory, quarantine unreferenced objects older than the maximum job lease, and delete only after review. An automated S3 orphan collector requires infrastructure-specific inventory/version and retention tests. No speculative garbage collection deletes files during ordinary processing.
 
+Known-session local upload parts now have a narrower [explicit maintenance API](web-platform-operations.md#temporary-upload-maintenance) that coordinates with live upload writers; it does not authorize the broader document/artifact orphan procedure above. Use committed plans and upload holds, and preserve session/part metadata. Do not manually remove files to bypass an integrity or hold rejection.
+
 ## Incidents and access reviews
 
 For suspected cross-tenant access, stop public/API access, preserve database/audit/object versions, capture only safe metadata, rotate session/application/DB/storage/provider credentials, and engage the designated security/legal contacts before customer notification decisions. Application-secret rotation invalidates signed fixtures and requires a controlled TOTP-key migration; do not replace it casually. Database/application/Redis credentials must be rotated consistently with the saved volume state.

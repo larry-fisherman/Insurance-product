@@ -12,6 +12,7 @@
 - `app/oidc.py`: configured OIDC code/PKCE flow and signed identity validation; live provider acceptance remains open.
 - `app/platform.py`, `app/platform_models.py`, `app/platform_admin.py`: onboarding, manual subscriptions, billing requests and controlled operator activation.
 - `app/uploads.py`: resumable, hash-bound private upload parts and quarantined finalization.
+- `app/upload_cleanup.py`, `app/temporary_storage.py`: explicit admin cleanup plans, upload-scoped holds, bounded local temporary-file validation/deletion and crash-safe intent replay; no scheduled collector or document/artifact purge. See [ADR 0007](decisions/0007-temporary-upload-cleanup.md).
 - `app/inquiries.py`: separately configured public inquiry persistence without operations credentials.
 - `app/parser_service.py`, `app/parser_runner.py`, `app/parser_client.py`: worker-only parsing transport and resource-limited, credential-free parsing children.
 - `app/database`: foundational metadata, runtime/auth pools, guarded local provisioning settings.

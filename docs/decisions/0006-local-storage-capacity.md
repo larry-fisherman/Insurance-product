@@ -18,10 +18,10 @@ S3 writes fail closed until durable distributed reservations, conditional immuta
 
 ## Remaining work
 
-Implement narrowly scoped, auditable cleanup of temporary parts and orphaned writes. Coordinate with finalization and retries; preserve original source bytes, package artifacts, approval hashes, metadata and any applicable holds. Do not delete the lock file while writers are active. Do not grant runtime blanket database deletion powers.
+[ADR 0007](0007-temporary-upload-cleanup.md) adds explicit, narrowly scoped cleanup of expired known-session temporary parts and rollback-created part files, with committed intents, upload holds and finalization coordination. Broader unknown-session and document/artifact orphan reconciliation remains open. Preserve original source bytes, package artifacts, approval hashes and metadata. Do not delete the lock file while writers are active. Do not grant runtime blanket database deletion powers.
 
 Hosted storage needs an independently accepted quota/reservation/reconciliation protocol, physical capacity monitoring, workload identities and retention/restore controls. No customer-data or public-deployment gate changes.
 
 ## Verification
 
-Regression cases cover retained objects without database rows across store restart, independent tenant/global limits, simultaneous writes from independent processes, bounded empty-object directory creation, preserved pre-existing over-budget history, S3 rejection before provider access, and repeated authenticated upload/abort attempts through the API.
+Regression cases cover retained objects without database rows across store restart, independent tenant/global limits, simultaneous writes from independent processes, abrupt writer-process termination with retained partial bytes and kernel lock release, bounded empty-object directory creation, preserved pre-existing over-budget history, S3 rejection before provider access, and repeated authenticated upload/abort attempts through the API.

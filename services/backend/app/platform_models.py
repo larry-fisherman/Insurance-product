@@ -69,6 +69,7 @@ class UploadSession(Base, TenantRecord):
     __table_args__ = (
         *owned("upload_session", submission_id="submission", document_id="document_version"),
         sa.CheckConstraint("byte_size > 0 AND byte_size <= 52428800", name="bounded_size"),
+        sa.CheckConstraint("cleanup_hold_version > 0", name="positive_cleanup_hold_version"),
     )
     submission_id: Mapped[UUID] = mapped_column(sa.Uuid)
     filename: Mapped[str] = mapped_column(sa.Text)
@@ -79,6 +80,8 @@ class UploadSession(Base, TenantRecord):
     expires_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
     document_id: Mapped[UUID | None] = mapped_column(sa.Uuid)
     status: Mapped[str] = mapped_column(sa.Text, server_default="open")
+    cleanup_hold: Mapped[bool] = mapped_column(server_default=sa.false())
+    cleanup_hold_version: Mapped[int] = mapped_column(server_default=sa.text("1"))
 
 
 class UploadPart(Base, TenantRecord):
@@ -93,3 +96,23 @@ class UploadPart(Base, TenantRecord):
     byte_size: Mapped[int] = mapped_column(sa.Integer)
     object_key: Mapped[str] = mapped_column(sa.Text)
     storage_version: Mapped[str | None] = mapped_column(sa.Text)
+
+
+class UploadCleanup(Base, TenantRecord):
+    __tablename__ = "upload_cleanup"
+    __table_args__ = (
+        *owned("upload_cleanup", upload_id="upload_session", requested_by="membership"),
+        sa.CheckConstraint(
+            "jsonb_typeof(objects) = 'array' AND jsonb_array_length(objects) BETWEEN 1 AND 100",
+            name="bounded_manifest",
+        ),
+    )
+    upload_id: Mapped[UUID] = mapped_column(sa.Uuid)
+    requested_by: Mapped[UUID] = mapped_column(sa.Uuid)
+    reason: Mapped[str] = mapped_column(sa.Text)
+    policy_version: Mapped[str] = mapped_column(sa.Text)
+    objects: Mapped[list[dict[str, str | int]]] = mapped_column(JSONB)
+    completed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    completion_summary: Mapped[dict[str, int]] = mapped_column(
+        JSONB, server_default=sa.text("'{}'::jsonb")
+    )

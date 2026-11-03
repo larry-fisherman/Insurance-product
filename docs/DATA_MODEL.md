@@ -101,7 +101,8 @@ Before enabling a second line, bind its versions explicitly across submission, e
 - `agency_subscription`: one per tenant, manual status/plan, billing contact, seat/submission limits, optional expiry and optimistic version. No payment credentials or fabricated invoice state.
 - `billing_request`: append-only tenant requests attributed to a membership.
 - `agency_activation`: operator-issued token hash, verified email binding, expiry, consumption/request hash and resulting tenant. Restricted definer functions perform activation; runtime cannot read activation secrets.
-- `upload_session`, `upload_part`: tenant/submission/initiator binding, expected complete-file hash and byte count, expiry, immutable object references, part hashes and finalized document linkage. Expired/aborted parts currently remain stored.
+- `upload_session`, `upload_part`: tenant/submission/initiator binding, expected complete-file hash and byte count, expiry, immutable object references, part hashes and finalized document linkage. Migration `0009_cleanup` adds an upload-scoped temporary-file preservation hold. Eligible temporary bytes can be explicitly cleaned while part/session metadata remains stored.
+- `upload_cleanup`: migration `0009_cleanup` adds forced-RLS, tenant-bound cleanup intents with immutable upload/member attribution, reason, policy and bounded file manifests. Completion records separate bytes removed in the successful attempt from already-absent objects. No runtime delete grant is added. See [ADR 0007](decisions/0007-temporary-upload-cleanup.md).
 - `auth_session`: context version, authentication time and last activity support session rotation, idle expiry and recent-authentication checks. Context references bind tenant plus session plus version.
 - `app_user.email_verified` and the expanded `oauth_state` support server-side managed identity. They do not prove live provider lifecycle acceptance.
 
