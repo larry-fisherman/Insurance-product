@@ -8,12 +8,32 @@ import psycopg
 from psycopg import sql
 from sqlalchemy.engine import make_url
 
-from app.database.config import DatabaseSettings
+from app.database.config import DatabaseSettings, StorageOperatorSettings
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def configure_storage_operator() -> None:
+    """A separate file: API and worker containers load .env.app, never this credential."""
+    target = ROOT / ".env.storage-operator"
+    if target.exists():
+        print("Existing private storage operator configuration preserved.")
+        return
+    password = secrets.token_hex(32)
+    base = make_url(DatabaseSettings().migration_database_url.get_secret_value())
+    url = base.set(username="cgl_storage_operator", password=password).render_as_string(
+        hide_password=False
+    )
+    descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+        output.write("# Local storage reconcile credential. Never commit this file.\n")
+        output.write(f"CGL_STORAGE_OPERATOR_PASSWORD={password}\n")
+        output.write(f"CGL_STORAGE_OPERATOR_DATABASE_URL={url}\n")
+    print("Created private storage operator configuration.")
+
+
 def configure() -> None:
+    configure_storage_operator()
     target = ROOT / ".env.app"
     if target.exists():
         print("Existing private application configuration preserved.")
@@ -75,6 +95,7 @@ def provision() -> None:
             for role, value in [
                 ("cgl_runtime", app.runtime_database_url),
                 ("cgl_auth", app.auth_database_url),
+                ("cgl_storage_operator", StorageOperatorSettings().storage_operator_database_url),
             ]:
                 url = make_url(value.get_secret_value())
                 exists = connection.execute(
@@ -91,7 +112,9 @@ def provision() -> None:
                         "ALTER ROLE {} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS PASSWORD {}"
                     ).format(sql.Identifier(role), sql.Literal(url.password))
                 )
-            connection.execute("GRANT CONNECT ON DATABASE cgl_dev TO cgl_runtime, cgl_auth")
+            connection.execute(
+                "GRANT CONNECT ON DATABASE cgl_dev TO cgl_runtime, cgl_auth, cgl_storage_operator"
+            )
     except psycopg.Error:
         raise RuntimeError(
             "Local database role provisioning failed; verify the private configuration"

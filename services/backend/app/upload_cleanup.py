@@ -163,17 +163,19 @@ def prepare(
     if not objects:
         fail(409, "UPLOAD_CLEANUP_EMPTY", "There are no eligible temporary files in this upload.")
     protect_references(scope, row, objects)
-    plan = UploadCleanup(
-        id=object_id,
-        tenant_id=scope.tenant_id,
-        upload_id=row.id,
-        requested_by=scope.membership_id,
-        reason=payload.reason,
-        policy_version=POLICY_VERSION,
-        objects=[item.model_dump() for item in objects],
+    # Lazy import: storage_quota reads this module's policy constants.
+    from app import storage_quota
+
+    # Runtime cannot insert intents directly; the definer rechecks eligibility.
+    storage_quota.plan_upload_cleanup(
+        scope.session,
+        object_id,
+        row.id,
+        scope.membership_id,
+        payload.reason,
+        [item.model_dump() for item in objects],
     )
-    scope.session.add(plan)
-    scope.session.flush()
+    plan = get(scope.session, UploadCleanup, object_id)
     audit(
         scope.session,
         scope.tenant_id,
@@ -223,8 +225,8 @@ def execute(upload_id: UUID, plan_id: UUID, scope: Scoped) -> CleanupResponse:
     from app import storage_quota
 
     # Every planned object is now absent. One definer call completes the intent and
-    # releases reservation-backed parts by reservation and pre-ledger parts by the
-    # manifest bytes, exactly once (guarded by completed_at IS NULL).
+    # releases reservation-backed parts by reservation and pre-ledger parts against
+    # reconcile's per-object record, each exactly once, across every plan listing them.
     released, legacy = storage_quota.release_upload_cleanup(scope.session, plan.id, summary)
     scope.session.refresh(plan)
     audit(

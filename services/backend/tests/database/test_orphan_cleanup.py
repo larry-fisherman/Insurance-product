@@ -19,7 +19,7 @@ from test_workspace import demo, post, process_pending
 from test_workspace import workspace_settings as workspace_settings
 
 from app import orphan_cleanup, storage_quota
-from app.common import digest, now
+from app.common import canonical_json, digest, now
 from app.config import Settings
 from app.database.models import AuditEvent
 from app.domain.models import DocumentVersion, Package, PackageArtifact
@@ -126,7 +126,16 @@ def test_planned_orphan_blocks_late_link_then_is_deleted_and_released_once(
     assert planned.json()["object_count"] == planned.json()["present_count"] == 1
     assert "object_key" not in planned.text and reservation.object_key not in planned.text
     assert path.exists()  # Planning has no storage side effect.
-    assert state(database_engine, reservation.id).state == "cleanup_planned"
+    planned_row = state(database_engine, reservation.id)
+    assert planned_row.state == "cleanup_planned"
+    # Give the planned reservation a live TTL, so only the state gate can refuse the link:
+    # neither link()'s expiry check nor the guard trigger's expiry check applies here.
+    with database_engine.begin() as connection:
+        connection.execute(
+            sa.update(StorageReservation)
+            .where(StorageReservation.id == reservation.id)
+            .values(expires_at=now() + timedelta(hours=1))
+        )
     with (
         pytest.raises(StorageCapacityError),
         storage_quota.tenant_session(
@@ -136,6 +145,13 @@ def test_planned_orphan_blocks_late_link_then_is_deleted_and_released_once(
         ) as session,
     ):
         storage_quota.link(session, reservation)  # A late business transaction fails.
+    assert state(database_engine, reservation.id).state == "cleanup_planned"
+    with database_engine.begin() as connection:
+        connection.execute(
+            sa.update(StorageReservation)
+            .where(StorageReservation.id == reservation.id)
+            .values(expires_at=planned_row.expires_at)
+        )
     completed = execute(client, planned.json())
     assert completed.status_code == 200, completed.text
     assert completed.json()["completion_summary"]["removed_bytes"] == len(body)
@@ -443,3 +459,265 @@ def test_writer_refuses_within_the_safety_margin_of_expiry(
     with pytest.raises(StorageCapacityError, match="^STORAGE_QUOTA_UNAVAILABLE$"):
         storage_quota.write(storage(workspace_settings), late, body, "application/pdf")
     assert not (workspace_settings.storage_path / reservation.object_key).parent.exists()
+
+
+def test_upload_parts_are_never_orphan_candidates_even_when_held_or_sessionless(
+    client: TestClient,
+    workspace_settings: Settings,
+    database_engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from test_storage_reservations import put_part, reservations, start_upload
+
+    from app.platform_models import UploadSession
+
+    submission, actor = demo(client)
+    body = b"fictional part whose request rolled back"
+    upload_id = start_upload(client, submission, body)
+
+    def broken(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("Synthetic failure after the object write")
+
+    monkeypatch.setattr(storage_quota, "link", broken)
+    with pytest.raises(RuntimeError, match="Synthetic failure"):
+        put_part(client, upload_id, body)
+    monkeypatch.undo()
+    [rolled_back] = reservations(database_engine, upload_id)
+    held = post(
+        client,
+        f"/uploads/{upload_id}/cleanup/hold",
+        {"reason": "Preserve fictional bytes for review.", "held": True, "expected_version": 1},
+    )
+    assert held.status_code == 200, held.text
+    # A rolled-back part whose owner is not a known upload session at all.
+    sessionless = uuid4()
+    sessionless_body = b"fictional part with no upload session"
+    stranded = storage_quota.reserve(
+        storage_quota.reservation_engine(workspace_settings),
+        workspace_settings,
+        UUID(actor["tenant_id"]),
+        UUID(actor["user_id"]),
+        purpose="upload_part",
+        owner_id=sessionless,
+        slot="0",
+        key=f"tenants/{actor['tenant_id']}/uploads/{sessionless}/0-{uuid4().hex}",
+        body=sessionless_body,
+    )
+    storage_quota.write(
+        storage(workspace_settings), stranded, sessionless_body, "application/octet-stream"
+    )
+    age(database_engine, workspace_settings, [rolled_back.id, stranded.id])
+    with database_engine.begin() as connection:
+        connection.execute(
+            sa.update(UploadSession)
+            .where(UploadSession.id == UUID(upload_id))
+            .values(expires_at=now() - timedelta(days=3))
+        )
+    before = charged(database_engine, actor["tenant_id"])
+    refused = plan(client)
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"]["code"] == "ORPHAN_CLEANUP_EMPTY"
+    for row in (rolled_back, stranded):
+        assert state(database_engine, row.id).state == "reserved"
+        assert (workspace_settings.storage_path / row.object_key).exists()
+    assert charged(database_engine, actor["tenant_id"]) == before
+    # ADR 0007, which honors the hold, remains the only deletion path for parts.
+    adr_0007 = post(client, f"/uploads/{upload_id}/cleanup/plan", REASON)
+    assert adr_0007.json()["detail"]["code"] == "UPLOAD_CLEANUP_HELD"
+    # The sweep only reports them, and they never count as orphan candidates.
+    from app import storage_sweep
+    from app.database.runtime import Database
+    from app.storage import FileStore
+
+    store = storage(workspace_settings)
+    assert isinstance(store, FileStore)
+    tenant, user = UUID(actor["tenant_id"]), UUID(actor["user_id"])
+    db = Database(workspace_settings)
+    try:
+        with db.tenant(tenant, user) as session:
+            report = storage_sweep.counts(session, tenant, store.scan_tenant(tenant))
+    finally:
+        db.close()
+    assert (report["orphan_candidates"], report["unlinked_upload_parts"]) == (0, 2)
+    assert (workspace_settings.storage_path / stranded.object_key).exists()
+
+
+def test_one_unsafe_object_does_not_block_the_rest_of_the_tenants_orphans(
+    client: TestClient, workspace_settings: Settings, database_engine: Engine
+) -> None:
+    _, actor = demo(client)
+    bad = orphan(workspace_settings, actor, b"fictional object that becomes unsafe")
+    good = orphan(workspace_settings, actor, b"fictional safe orphan")
+    age(database_engine, workspace_settings, [bad.id], days=4)  # Selected first: oldest expiry.
+    age(database_engine, workspace_settings, [good.id], days=3)
+    target = workspace_settings.storage_path / bad.object_key
+    target.unlink()
+    outside = workspace_settings.storage_path / "fictional-outside-target"
+    outside.write_bytes(b"fictional outside bytes")
+    target.symlink_to(outside)
+    planned = plan(client)
+    assert planned.status_code == 201, planned.text
+    assert planned.json()["object_count"] == 1
+    assert state(database_engine, bad.id).state == "reserved"
+    assert state(database_engine, good.id).state == "cleanup_planned"
+    assert execute(client, planned.json()).status_code == 200
+    assert state(database_engine, good.id).state == "released"
+    # The unsafe object is untouched and stays charged, and is refused alone.
+    assert state(database_engine, bad.id).state == "reserved"
+    assert target.is_symlink() and outside.read_bytes() == b"fictional outside bytes"
+    assert plan(client).json()["detail"]["code"] == "ORPHAN_CLEANUP_UNSAFE"
+
+
+def test_lost_plans_stay_visible_in_the_sweep_and_operator_report(
+    client: TestClient,
+    workspace_settings: Settings,
+    database_engine: Engine,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from app import storage_admin, storage_sweep
+    from app.database.runtime import Database
+    from app.storage import FileStore
+
+    _, actor = demo(client)
+    tenant, user = UUID(actor["tenant_id"]), UUID(actor["user_id"])
+    reservation = orphan(workspace_settings, actor)
+    age(database_engine, workspace_settings, [reservation.id])
+    planned = plan(client).json()  # The client now loses this response and its key.
+    store = storage(workspace_settings)
+    assert isinstance(store, FileStore)
+    db = Database(workspace_settings)
+    try:
+        with db.tenant(tenant, user) as session:
+            report = storage_sweep.counts(session, tenant, store.scan_tenant(tenant))
+    finally:
+        db.close()
+    assert (report["orphan_candidates"], report["cleanup_planned"]) == (0, 1)
+    assert storage_admin.run_report(workspace_settings) == 0
+    line = next(
+        text for text in capsys.readouterr().out.splitlines() if text.startswith(f"tenant={tenant}")
+    )
+    assert "cleanup_planned=1" in line and f"pending_plans={planned['id']}" in line
+    assert reservation.object_key not in line
+    # The recovered ID is enough to finish the plan.
+    assert execute(client, planned).status_code == 200
+    assert storage_admin.run_report(workspace_settings) == 0
+    line = next(
+        text for text in capsys.readouterr().out.splitlines() if text.startswith(f"tenant={tenant}")
+    )
+    assert "cleanup_planned=0" in line and "pending_plans" not in line
+
+
+def test_runtime_cannot_fabricate_an_intent_to_lower_counters(
+    client: TestClient, workspace_settings: Settings, database_engine: Engine
+) -> None:
+    from test_storage_reservations import put_part, reservations, start_upload
+
+    from app.platform_models import UploadCleanup, UploadSession
+
+    submission, actor = demo(client)
+    tenant, user = UUID(actor["tenant_id"]), UUID(actor["user_id"])
+    member = UUID(actor["membership_id"])
+    engine = storage_quota.reservation_engine(workspace_settings)
+    with database_engine.connect() as connection:
+        document = connection.execute(
+            sa.select(DocumentVersion).where(DocumentVersion.submission_id == UUID(submission))
+        ).first()
+    assert document is not None
+    [committed] = reservations(database_engine, document.id)
+    live = orphan(workspace_settings, actor, b"fictional live reservation")
+    expired = orphan(workspace_settings, actor, b"fictional real orphan bytes")
+    age(database_engine, workspace_settings, [expired.id])
+    body = b"fictional live upload part"
+    upload_id = start_upload(client, submission, body)
+    assert put_part(client, upload_id, body).status_code == 200
+    [part] = reservations(database_engine, upload_id)
+    before = charged(database_engine, actor["tenant_id"])
+    manifest = '[{"reservation_id": "%s", "present": false, "byte_size": 0}]'
+
+    def as_runtime(statement: Any, parameters: dict[str, Any] | None = None) -> None:
+        with storage_quota.tenant_session(engine, tenant, user) as session:
+            session.execute(statement, parameters or {})
+
+    # No direct intent inserts, for either kind of cleanup.
+    for model, values in (
+        (
+            ObjectCleanup,
+            {
+                "category": "reservation_orphan",
+                "policy_version": "storage-orphan-cleanup-1",
+                "objects": [{"reservation_id": str(committed.id)}],
+            },
+        ),
+        (
+            UploadCleanup,
+            {
+                "upload_id": UUID(upload_id),
+                "policy_version": "local-upload-cleanup-1",
+                "objects": [{"name": "0-" + "0" * 32, "byte_size": 1048576, "sha256": "0" * 64}],
+            },
+        ),
+    ):
+        with pytest.raises(sa.exc.DBAPIError, match="permission denied"):
+            as_runtime(
+                sa.insert(model).values(
+                    id=uuid4(),
+                    tenant_id=tenant,
+                    requested_by=member,
+                    reason="Fabricated fictional intent",
+                    **values,
+                )
+            )
+    # No direct move to cleanup_planned, which would make a completion call possible.
+    with pytest.raises(sa.exc.DBAPIError, match="require a planning or completion function"):
+        as_runtime(
+            sa.update(StorageReservation)
+            .where(StorageReservation.id == expired.id)
+            .values(state="cleanup_planned")
+        )
+    # The planning definer decides from the rows: nothing ineligible can be planned.
+    plan_call = sa.text(
+        "SELECT app.plan_object_cleanup(:id, :member, 'Fabricated fictional intent',"
+        " CAST(:objects AS jsonb))"
+    )
+    for target in (committed.id, live.id, part.id):
+        with pytest.raises(sa.exc.DBAPIError, match="not an eligible orphan"):
+            as_runtime(plan_call, {"id": uuid4(), "member": member, "objects": manifest % target})
+    with pytest.raises(sa.exc.DBAPIError, match="not an eligible orphan"):
+        as_runtime(plan_call, {"id": uuid4(), "member": member, "objects": manifest % uuid4()})
+    # A live upload cannot be planned, nor one under a preservation hold.
+    upload_call = sa.text(
+        "SELECT app.plan_upload_cleanup(:id, :upload, :member, 'Fabricated fictional intent',"
+        " CAST(:objects AS jsonb))"
+    )
+    fabricated = canonical_json(
+        [{"name": "0-" + "0" * 32, "byte_size": 1048576, "sha256": "0" * 64}]
+    )
+    parameters = {"upload": UUID(upload_id), "member": member, "objects": fabricated}
+    with pytest.raises(sa.exc.DBAPIError, match="not eligible for cleanup"):
+        as_runtime(upload_call, {"id": uuid4(), **parameters})
+    with database_engine.begin() as connection:
+        connection.execute(
+            sa.update(UploadSession)
+            .where(UploadSession.id == UUID(upload_id))
+            .values(expires_at=now() - timedelta(days=3), cleanup_hold=True)
+        )
+    with pytest.raises(sa.exc.DBAPIError, match="not eligible for cleanup"):
+        as_runtime(upload_call, {"id": uuid4(), **parameters})
+    # An eligible upload with a fabricated part and byte count lowers nothing: the bytes
+    # come from reconcile's record and reservation rows, never from the manifest.
+    with database_engine.begin() as connection:
+        connection.execute(
+            sa.update(UploadSession)
+            .where(UploadSession.id == UUID(upload_id))
+            .values(cleanup_hold=False)
+        )
+    intent = uuid4()
+    as_runtime(upload_call, {"id": intent, **parameters})
+    as_runtime(
+        sa.text("SELECT * FROM app.release_upload_cleanup(:id, CAST('{}' AS jsonb))"),
+        {"id": intent},
+    )
+    assert charged(database_engine, actor["tenant_id"]) == before
+    # Requesting under another member's identity is refused as well.
+    with pytest.raises(sa.exc.DBAPIError, match="Invalid cleanup plan"):
+        as_runtime(plan_call, {"id": uuid4(), "member": uuid4(), "objects": manifest % expired.id})

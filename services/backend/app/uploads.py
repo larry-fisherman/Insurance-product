@@ -1,17 +1,17 @@
 """Tenant-bound chunked transfer. Finalization reuses the existing intake invariants."""
 
 from datetime import datetime, timedelta
-from typing import Any
-from uuid import UUID, uuid4
+from typing import Annotated, Any
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 import sqlalchemy as sa
-from fastapi import APIRouter, Header, Request
+from fastapi import APIRouter, Depends, Header, Request
 from pydantic import BaseModel, Field
 
 from app import storage_quota
 from app.common import digest, fail, now, record
 from app.domain.models import DocumentVersion, Submission
-from app.identity import Input, Scoped
+from app.identity import Authenticated, Input, Scoped
 from app.platform import require_capacity
 from app.platform_models import UploadPart, UploadSession
 from app.storage import storage
@@ -118,65 +118,78 @@ def upload_status(upload_id: UUID, scope: Scoped) -> dict[str, Any]:
     return response(scope, accessible(scope, upload_id))
 
 
-@router.put("/uploads/{upload_id}/parts/{number}", response_model=UploadResponse)
-async def put_part(upload_id: UUID, number: int, request: Request, scope: Scoped) -> dict[str, Any]:
-    require_capacity(scope)
-    row = accessible(scope, upload_id)
-    if row.document_id:
-        fail(409, "UPLOAD_FINALIZED", "The upload is already finalized.")
-    if not 0 <= number < (row.byte_size + CHUNK_SIZE - 1) // CHUNK_SIZE:
-        fail(422, "INVALID_PART", "Invalid upload part.")
+async def part_body(request: Request, _: Authenticated) -> bytes:
+    """Read the bounded body on the event loop, after authentication and before any DB lock."""
     body = bytearray()
     async for chunk in request.stream():
         body.extend(chunk)
         if len(body) > CHUNK_SIZE:
             fail(413, "PART_TOO_LARGE", "Upload parts are limited to 1 MiB.")
-    expected = min(CHUNK_SIZE, row.byte_size - number * CHUNK_SIZE)
-    if len(body) != expected:
-        fail(422, "PART_SIZE", "The part size does not match this upload.")
-    sha = digest(bytes(body))
-    previous = scope.session.scalar(
-        sa.select(UploadPart).where(UploadPart.upload_id == row.id, UploadPart.number == number)
-    )
-    if previous:
-        if previous.sha256 != sha:
+    return bytes(body)
+
+
+# A plain ``def`` route: every database call stays off the event loop, which request
+# teardown (the commit that releases locks) also needs.
+@router.put("/uploads/{upload_id}/parts/{number}", response_model=UploadResponse)
+def put_part(
+    upload_id: UUID,
+    number: int,
+    body: Annotated[bytes, Depends(part_body)],
+    scope: Scoped,
+) -> dict[str, Any]:
+    with storage_quota.bounded_locks(scope.session):
+        require_capacity(scope)
+        row = accessible(scope, upload_id)
+        if row.document_id:
+            fail(409, "UPLOAD_FINALIZED", "The upload is already finalized.")
+        if not 0 <= number < (row.byte_size + CHUNK_SIZE - 1) // CHUNK_SIZE:
+            fail(422, "INVALID_PART", "Invalid upload part.")
+        expected = min(CHUNK_SIZE, row.byte_size - number * CHUNK_SIZE)
+        if len(body) != expected:
+            fail(422, "PART_SIZE", "The part size does not match this upload.")
+        sha = digest(body)
+        previous = scope.session.scalar(
+            sa.select(UploadPart).where(UploadPart.upload_id == row.id, UploadPart.number == number)
+        )
+        if previous:
+            if previous.sha256 != sha:
+                fail(409, "PART_CONFLICT", "This part was already uploaded with different bytes.")
+            return response(scope, row)
+        # Unique immutable keys avoid replacing any bytes, including after a rolled-back
+        # transaction. The reservation commits first (a durable write intent); a retry with
+        # identical bytes reuses it and its key instead of charging twice.
+        try:
+            reservation = storage_quota.reserve(
+                storage_quota.reservation_engine(scope.configuration),
+                scope.configuration,
+                scope.tenant_id,
+                scope.actor.user_id,
+                purpose="upload_part",
+                owner_id=row.id,
+                slot=str(number),
+                key=f"tenants/{scope.tenant_id}/uploads/{row.id}/{number}-{uuid4().hex}",
+                body=body,
+                created_by=scope.membership_id,
+            )
+        except storage_quota.ReservationConflict:
             fail(409, "PART_CONFLICT", "This part was already uploaded with different bytes.")
+        version = storage_quota.write(
+            storage(scope.configuration), reservation, body, "application/octet-stream"
+        )
+        scope.session.add(
+            UploadPart(
+                tenant_id=scope.tenant_id,
+                upload_id=row.id,
+                number=number,
+                sha256=sha,
+                byte_size=len(body),
+                object_key=reservation.object_key,
+                storage_version=version,
+            )
+        )
+        scope.session.flush()
+        storage_quota.link(scope.session, reservation)
         return response(scope, row)
-    # Unique immutable keys avoid replacing any bytes, including after a rolled-back transaction.
-    # The reservation commits first (a durable write intent); a retry with identical bytes
-    # reuses it and its key instead of charging twice.
-    try:
-        reservation = storage_quota.reserve(
-            storage_quota.reservation_engine(scope.configuration),
-            scope.configuration,
-            scope.tenant_id,
-            scope.actor.user_id,
-            purpose="upload_part",
-            owner_id=row.id,
-            slot=str(number),
-            key=f"tenants/{scope.tenant_id}/uploads/{row.id}/{number}-{uuid4().hex}",
-            body=bytes(body),
-            created_by=scope.membership_id,
-        )
-    except storage_quota.ReservationConflict:
-        fail(409, "PART_CONFLICT", "This part was already uploaded with different bytes.")
-    version = storage_quota.write(
-        storage(scope.configuration), reservation, bytes(body), "application/octet-stream"
-    )
-    scope.session.add(
-        UploadPart(
-            tenant_id=scope.tenant_id,
-            upload_id=row.id,
-            number=number,
-            sha256=sha,
-            byte_size=len(body),
-            object_key=reservation.object_key,
-            storage_version=version,
-        )
-    )
-    scope.session.flush()
-    storage_quota.link(scope.session, reservation)
-    return response(scope, row)
 
 
 @router.post("/uploads/{upload_id}/finalize", response_model=UploadResponse)
@@ -205,8 +218,11 @@ def finalize(upload_id: UUID, scope: Scoped) -> dict[str, Any]:
         body.extend(data)
     if len(body) != row.byte_size or digest(bytes(body)) != row.sha256:
         fail(422, "UPLOAD_HASH_MISMATCH", "File bytes differ from the initialized upload.")
+    # A session finalizes once, so its document ID is stable: a retry after a rollback
+    # binds to the same reservation and object instead of charging the file again.
+    document_id = uuid5(NAMESPACE_URL, f"cgl:upload-document:{row.tenant_id}:{row.id}")
     document = store_document(
-        scope, submission, row.filename, bytes(body), uuid4(), row.supersedes_id
+        scope, submission, row.filename, bytes(body), document_id, row.supersedes_id
     )
     row.document_id = document.id
     row.status = "finalized"

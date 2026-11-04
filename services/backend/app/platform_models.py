@@ -5,7 +5,7 @@ from typing import Any
 from uuid import UUID
 
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database.models import Base, IdentityMixin
@@ -168,6 +168,9 @@ class StorageUsage(Base):
     committed_bytes: Mapped[int] = mapped_column(sa.BigInteger, server_default="0")
     entries: Mapped[int] = mapped_column(sa.BigInteger, server_default="0")
     initialized: Mapped[bool] = mapped_column(server_default=sa.false())
+    charged_directories: Mapped[list[str]] = mapped_column(
+        ARRAY(sa.Text), server_default=sa.text("'{}'::text[]")
+    )
     version: Mapped[int] = mapped_column(sa.BigInteger, server_default="1")
     updated_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), server_default=sa.func.now()
@@ -177,15 +180,19 @@ class StorageUsage(Base):
 class StorageReservation(Base, IdentityMixin):
     """Durable write intent committed before every object write.
 
-    Deliberately without tenant/membership foreign keys (see migration 0010): the
-    reservation transaction must not wait on the tenant row a business transaction
-    locks. Forced RLS and the definer function bind the tenant.
+    ``require_capacity`` locks the tenant row FOR NO KEY UPDATE, so the foreign key
+    checks here never wait on the caller's own business transaction (ADR 0008).
     """
 
     __tablename__ = "storage_reservation"
     __table_args__ = (
         sa.UniqueConstraint("tenant_id", "id", name="uq_storage_reservation_tenant_id"),
         sa.UniqueConstraint("object_key", name="uq_storage_reservation_object_key"),
+        sa.ForeignKeyConstraint(
+            ["tenant_id", "created_by"],
+            ["app.membership.tenant_id", "app.membership.id"],
+            name="fk_storage_reservation_created_by",
+        ),
         sa.Index("ix_storage_reservation_slot", "tenant_id", "purpose", "owner_id", "slot"),
         sa.Index("ix_storage_reservation_state", "tenant_id", "state", "expires_at"),
         sa.CheckConstraint(
@@ -196,8 +203,11 @@ class StorageReservation(Base, IdentityMixin):
         ),
         sa.CheckConstraint("byte_size >= 0", name="non_negative_size"),
         sa.CheckConstraint("length(slot) BETWEEN 1 AND 100", name="bounded_slot"),
+        sa.CheckConstraint("entry_charge > 0", name="positive_entry_charge"),
     )
-    tenant_id: Mapped[UUID] = mapped_column(sa.Uuid)
+    tenant_id: Mapped[UUID] = mapped_column(
+        sa.ForeignKey("app.tenant.id", name="fk_storage_reservation_tenant_id")
+    )
     purpose: Mapped[str] = mapped_column(sa.Text)
     owner_id: Mapped[UUID] = mapped_column(sa.Uuid)
     slot: Mapped[str] = mapped_column(sa.Text)
@@ -209,6 +219,22 @@ class StorageReservation(Base, IdentityMixin):
     expires_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
     created_by: Mapped[UUID | None] = mapped_column(sa.Uuid)
     linked_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    released_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    release_ref: Mapped[UUID | None] = mapped_column(sa.Uuid)
+    entry_charge: Mapped[int] = mapped_column(server_default="1")
+
+
+class StorageLegacyPart(Base, TenantRecord):
+    """A pre-ledger upload part measured by reconcile; its bytes lower the baseline once."""
+
+    __tablename__ = "storage_legacy_part"
+    __table_args__ = (
+        *owned("storage_legacy_part"),
+        sa.UniqueConstraint("object_key", name="uq_storage_legacy_part_object_key"),
+        sa.CheckConstraint("byte_size >= 0", name="non_negative_size"),
+    )
+    object_key: Mapped[str] = mapped_column(sa.Text)
+    byte_size: Mapped[int] = mapped_column(sa.BigInteger)
     released_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     release_ref: Mapped[UUID | None] = mapped_column(sa.Uuid)
 
@@ -258,4 +284,6 @@ class StorageSweep(Base, TenantRecord):
     anomalies: Mapped[int | None] = mapped_column(sa.BigInteger)
     drift_bytes: Mapped[int | None] = mapped_column(sa.BigInteger)
     drift_entries: Mapped[int | None] = mapped_column(sa.BigInteger)
+    unlinked_upload_parts: Mapped[int | None] = mapped_column(sa.BigInteger)
+    cleanup_planned: Mapped[int | None] = mapped_column(sa.BigInteger)
     reconciled_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))

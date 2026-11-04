@@ -1,5 +1,6 @@
 from collections.abc import Callable
 from contextlib import AbstractContextManager
+from typing import Any
 
 import pytest
 import sqlalchemy as sa
@@ -282,3 +283,70 @@ def test_evidence_upgrade_invalidates_legacy_current_approvals_without_rewriting
             )
             == 1
         )
+
+
+def test_storage_upgrades_seed_existing_tenants_closed_and_round_trip(
+    database_factory: Callable[[], AbstractContextManager[Engine]],
+    migration_config: Callable[[Connection], Config],
+) -> None:
+    from uuid import uuid4
+
+    from app.database.models import Tenant
+
+    existing, created = uuid4(), uuid4()
+    with database_factory() as engine, engine.connect() as connection:
+        config = migration_config(connection)
+        command.upgrade(config, "0009_cleanup")
+        connection.execute(sa.insert(Tenant).values(id=existing, name="Fictional existing agency"))
+        connection.commit()
+        command.upgrade(config, "0010_storage")
+        # A tenant from before the ledger fails closed until reconcile seeds it.
+        assert (
+            connection.scalar(
+                sa.text("SELECT initialized FROM app.storage_usage WHERE tenant_id = :id"),
+                {"id": existing},
+            )
+            is False
+        )
+        connection.execute(
+            sa.text(
+                "INSERT INTO app.storage_reservation(id, tenant_id, purpose, owner_id, slot,"
+                " object_key, byte_size, sha256, request_hash, expires_at) VALUES"
+                " (:id, :tenant, 'document', :owner, 'original', :key, 7, :digest, :digest, now())"
+            ),
+            {
+                "id": uuid4(),
+                "tenant": existing,
+                "owner": uuid4(),
+                "key": f"tenants/{existing}/documents/{uuid4()}/original",
+                "digest": "0" * 64,
+            },
+        )
+        connection.commit()
+        command.upgrade(config, "head")
+        command.check(config)
+        # A pre-0011 reservation keeps the single entry it was actually charged.
+        assert connection.scalar(sa.text("SELECT entry_charge FROM app.storage_reservation")) == 1
+        connection.execute(sa.insert(Tenant).values(id=created, name="Fictional new agency"))
+        rows: dict[Any, bool] = {
+            row.tenant_id: row.initialized
+            for row in connection.execute(
+                sa.text("SELECT tenant_id, initialized FROM app.storage_usage")
+            )
+        }
+        assert rows == {existing: False, created: True}
+        assert not connection.scalar(
+            sa.text("SELECT has_table_privilege('cgl_runtime', 'app.object_cleanup', 'INSERT')")
+        )
+        connection.commit()
+        command.downgrade(config, "0010_storage")
+        assert connection.scalar(
+            sa.text(
+                "SELECT has_function_privilege('cgl_runtime',"
+                " 'app.reconcile_storage(bigint,bigint)', 'EXECUTE')"
+            )
+        )
+        assert connection.scalar(sa.text("SELECT count(*) FROM app.storage_reservation")) == 1
+        connection.commit()
+        command.upgrade(config, "head")
+        command.check(config)

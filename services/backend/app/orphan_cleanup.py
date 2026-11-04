@@ -1,9 +1,11 @@
 """Explicit tenant-admin cleanup of reservation-backed orphan objects (ADR 0008).
 
 A two-request plan/execute flow like ADR 0007. It accepts IDs only, never keys or
-paths. Only ``reserved`` (never linked) reservations past expiry plus grace whose
-key no retained row references are candidates. Committed documents, artifacts and
-upload parts, and pre-ledger files without a reservation, are never eligible.
+paths. Only ``reserved`` (never linked) document and artifact reservations past
+expiry plus grace whose key no retained row references are candidates. Upload parts
+are out of scope entirely: ADR 0007, which honors preservation holds, is the only
+path that deletes them, and a rolled-back part with no upload session stays on disk
+and is only reported. Pre-ledger files without a reservation are never eligible.
 """
 
 from datetime import datetime
@@ -74,10 +76,21 @@ def candidates(at: datetime) -> sa.Select[StorageReservation]:
         sa.select(StorageReservation)
         .where(
             StorageReservation.state == "reserved",
+            StorageReservation.purpose != "upload_part",
             StorageReservation.expires_at < at - ORPHAN_GRACE,
             unreferenced(),
         )
         .order_by(StorageReservation.expires_at, StorageReservation.id)
+    )
+
+
+def unlinked_upload_parts(at: datetime) -> sa.Select[StorageReservation]:
+    """Report-only: rolled-back parts past grace, which this flow never touches."""
+    return sa.select(StorageReservation).where(
+        StorageReservation.state == "reserved",
+        StorageReservation.purpose == "upload_part",
+        StorageReservation.expires_at < at - ORPHAN_GRACE,
+        unreferenced(),
     )
 
 
@@ -111,25 +124,22 @@ def prepare(
     )
     if not rows:
         fail(409, "ORPHAN_CLEANUP_EMPTY", "There are no eligible orphaned objects.")
-    try:
-        objects = inventory_reserved(
-            store, [(row.object_key, row.id, row.byte_size, row.expires_at) for row in rows]
-        )
-    except (OSError, ValueError, TemporaryStorageError):
-        fail(409, "ORPHAN_CLEANUP_UNSAFE", "Objects changed or cannot be safely inspected.")
-    for row in rows:
-        row.state = "cleanup_planned"  # A late link() now fails instead of racing deletion.
-    plan = ObjectCleanup(
-        id=object_id,
-        tenant_id=scope.tenant_id,
-        category="reservation_orphan",
-        requested_by=scope.membership_id,
-        reason=payload.reason,
-        policy_version=ORPHAN_POLICY_VERSION,
-        objects=[item.model_dump(mode="json") for item in objects],
+    # An unsafe object stays reserved and untouched, without blocking the rest of the batch.
+    objects, unsafe = inventory_reserved(
+        store, [(row.object_key, row.id, row.byte_size, row.expires_at) for row in rows]
     )
-    scope.session.add(plan)
-    scope.session.flush()
+    if not objects:
+        fail(409, "ORPHAN_CLEANUP_UNSAFE", "Objects changed or cannot be safely inspected.")
+    # The definer moves the reservations to cleanup_planned, so a late link() fails instead
+    # of racing deletion, and records the intent. Runtime can do neither directly.
+    storage_quota.plan_object_cleanup(
+        scope.session,
+        object_id,
+        scope.membership_id,
+        payload.reason,
+        [item.model_dump(mode="json") for item in objects],
+    )
+    plan = get(scope.session, ObjectCleanup, object_id)
     audit(
         scope.session,
         scope.tenant_id,
@@ -137,7 +147,7 @@ def prepare(
         "storage.orphan_cleanup_planned",
         "object_cleanup",
         plan.id,
-        {"objects": len(objects), "policy": ORPHAN_POLICY_VERSION},
+        {"objects": len(objects), "skipped_unsafe": unsafe, "policy": ORPHAN_POLICY_VERSION},
     )
     return response(plan)
 
@@ -179,6 +189,9 @@ def execute(plan_id: UUID, scope: Scoped) -> OrphanCleanupResponse:
             fail(409, "ORPHAN_CLEANUP_CHANGED", "The planned reservations changed.")
         if row.state == "released":
             continue  # Already released by an ADR 0007 upload cleanup of the same part.
+        if row.purpose == "upload_part":
+            # Only a plan from before migration 0011 can list a part: ADR 0007 owns it.
+            fail(409, "ORPHAN_CLEANUP_CHANGED", "The planned reservations changed.")
         if row.expires_at >= now() - ORPHAN_GRACE:
             fail(409, "ORPHAN_CLEANUP_NOT_READY", "Wait until the orphan grace period passes.")
         pending.append((row.object_key, row.byte_size, row.expires_at, item))

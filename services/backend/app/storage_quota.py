@@ -4,7 +4,8 @@ Every object write is reserve -> write -> link. ``reserve`` commits its own shor
 transaction before the write, so a rolled-back business transaction leaves a
 charged reservation (a durable write intent). ``link`` runs inside the business
 transaction and only flips the reservation row. Counters move only inside the
-definer functions; this module never accepts a tenant, path or limit from callers.
+definer functions. Callers supply the session scope and a server-generated key; the
+definer rebinds the key to the session's tenant, and limits are never accepted.
 """
 
 import threading
@@ -12,22 +13,25 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, NoReturn
 from uuid import UUID, uuid4
 
 import sqlalchemy as sa
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 from app.common import canonical_json, digest, now
 from app.config import Settings
 from app.platform_models import StorageReservation
-from app.storage import StorageCapacityError, Store
+from app.storage import StorageCapacityError, Store, TenantScan
 from app.upload_cleanup import RESERVATION_TTL, WRITE_MARGIN
 
 Purpose = Literal["upload_part", "document", "artifact"]
 _engines: dict[str, Engine] = {}
 _engine_lock = threading.Lock()
+LOCK_TIMEOUT = "5s"  # Matches the SET clause on the storage definer functions (migration 0011).
+LOCK_FAILURES = {"55P03", "40P01"}  # lock_not_available, deadlock_detected.
 
 
 class ReservationConflict(Exception):
@@ -78,6 +82,27 @@ def reservation_engine(configuration: Settings) -> Engine:
     return engine
 
 
+def reraise_lock_failure(error: DBAPIError) -> NoReturn:
+    """A bounded lock wait gave up: fail closed with the existing retryable storage code."""
+    if getattr(error.orig, "sqlstate", None) in LOCK_FAILURES:
+        raise StorageCapacityError("STORAGE_QUOTA_UNAVAILABLE") from None
+    raise error
+
+
+@contextmanager
+def bounded_locks(session: Session) -> Iterator[None]:
+    """Bound every lock wait in this block, restoring the caller's setting afterwards."""
+    previous = session.scalar(sa.text("SELECT current_setting('lock_timeout')"))
+    session.execute(
+        sa.text("SELECT set_config('lock_timeout', :value, true)"), {"value": LOCK_TIMEOUT}
+    )
+    try:
+        yield
+    except DBAPIError as error:
+        reraise_lock_failure(error)
+    session.execute(sa.text("SELECT set_config('lock_timeout', :value, true)"), {"value": previous})
+
+
 @contextmanager
 def tenant_session(engine: Engine, tenant_id: UUID, user_id: UUID) -> Iterator[Session]:
     # Same transaction-local scope as Database.tenant(); commits on exit.
@@ -109,26 +134,29 @@ def reserve(
         # The S3 gate stays closed: fail before any charge or provider call.
         raise StorageCapacityError("STORAGE_QUOTA_UNAVAILABLE")
     sha = digest(body)
-    with tenant_session(engine, tenant_id, user_id) as session:
-        row = session.execute(
-            sa.text(
-                "SELECT * FROM app.reserve_storage(:id, :purpose, :owner, :slot, :key, :bytes,"
-                " :sha, :hash, :ttl, :margin, :created_by)"
-            ),
-            {
-                "id": uuid4(),
-                "purpose": purpose,
-                "owner": owner_id,
-                "slot": slot,
-                "key": key,
-                "bytes": len(body),
-                "sha": sha,
-                "hash": request_hash(purpose, owner_id, slot, len(body), sha),
-                "ttl": int(RESERVATION_TTL.total_seconds()),
-                "margin": int(WRITE_MARGIN.total_seconds()),
-                "created_by": created_by,
-            },
-        ).one()
+    try:
+        with tenant_session(engine, tenant_id, user_id) as session:
+            row = session.execute(
+                sa.text(
+                    "SELECT * FROM app.reserve_storage(:id, :purpose, :owner, :slot, :key, :bytes,"
+                    " :sha, :hash, :ttl, :margin, :created_by)"
+                ),
+                {
+                    "id": uuid4(),
+                    "purpose": purpose,
+                    "owner": owner_id,
+                    "slot": slot,
+                    "key": key,
+                    "bytes": len(body),
+                    "sha": sha,
+                    "hash": request_hash(purpose, owner_id, slot, len(body), sha),
+                    "ttl": int(RESERVATION_TTL.total_seconds()),
+                    "margin": int(WRITE_MARGIN.total_seconds()),
+                    "created_by": created_by,
+                },
+            ).one()
+    except DBAPIError as error:
+        reraise_lock_failure(error)
     if row.outcome == "capacity":
         raise StorageCapacityError("STORAGE_CAPACITY_REACHED")
     if row.outcome == "unavailable":
@@ -166,11 +194,12 @@ def write(store: Store, reservation: Reservation, body: bytes, content_type: str
 
 def link(session: Session, reservation: Reservation) -> None:
     """Commit the reservation inside the business transaction that records the object."""
-    row = session.scalar(
-        sa.select(StorageReservation)
-        .where(StorageReservation.id == reservation.id)
-        .with_for_update()
-    )
+    with bounded_locks(session):
+        row = session.scalar(
+            sa.select(StorageReservation)
+            .where(StorageReservation.id == reservation.id)
+            .with_for_update()
+        )
     if (
         row is None
         or row.state != "reserved"
@@ -183,30 +212,100 @@ def link(session: Session, reservation: Reservation) -> None:
     session.flush()
 
 
+def plan_upload_cleanup(
+    session: Session,
+    plan_id: UUID,
+    upload_id: UUID,
+    requested_by: UUID,
+    reason: str,
+    objects: list[dict[str, Any]],
+) -> None:
+    """Commit an ADR 0007 intent; the definer rechecks hold, expiry and references."""
+    try:
+        session.execute(
+            sa.text(
+                "SELECT app.plan_upload_cleanup(:id, :upload, :member, :reason,"
+                " CAST(:objects AS jsonb))"
+            ),
+            {
+                "id": plan_id,
+                "upload": upload_id,
+                "member": requested_by,
+                "reason": reason,
+                "objects": canonical_json(objects),
+            },
+        )
+    except DBAPIError as error:
+        reraise_lock_failure(error)
+
+
+def plan_object_cleanup(
+    session: Session,
+    plan_id: UUID,
+    requested_by: UUID,
+    reason: str,
+    objects: list[dict[str, Any]],
+) -> None:
+    """Commit an orphan intent; the definer decides eligibility from the reservation rows."""
+    try:
+        session.execute(
+            sa.text(
+                "SELECT app.plan_object_cleanup(:id, :member, :reason, CAST(:objects AS jsonb))"
+            ),
+            {
+                "id": plan_id,
+                "member": requested_by,
+                "reason": reason,
+                "objects": canonical_json(objects),
+            },
+        )
+    except DBAPIError as error:
+        reraise_lock_failure(error)
+
+
 def release_upload_cleanup(
     session: Session, cleanup_id: UUID, summary: dict[str, Any]
 ) -> tuple[int, int]:
     """Complete an ADR 0007 intent and release its parts exactly once (one definer call)."""
-    row = session.execute(
-        sa.text("SELECT * FROM app.release_upload_cleanup(:id, CAST(:summary AS jsonb))"),
-        {"id": cleanup_id, "summary": canonical_json(summary)},
-    ).one()
+    try:
+        row = session.execute(
+            sa.text("SELECT * FROM app.release_upload_cleanup(:id, CAST(:summary AS jsonb))"),
+            {"id": cleanup_id, "summary": canonical_json(summary)},
+        ).one()
+    except DBAPIError as error:
+        reraise_lock_failure(error)
     return int(row.released_bytes), int(row.legacy_bytes)
 
 
 def release_object_cleanup(session: Session, cleanup_id: UUID, summary: dict[str, Any]) -> int:
     """Complete an orphan intent and release its reservations exactly once."""
-    return int(
-        session.scalar(
-            sa.text("SELECT app.release_object_cleanup(:id, CAST(:summary AS jsonb))"),
-            {"id": cleanup_id, "summary": canonical_json(summary)},
+    try:
+        return int(
+            session.scalar(
+                sa.text("SELECT app.release_object_cleanup(:id, CAST(:summary AS jsonb))"),
+                {"id": cleanup_id, "summary": canonical_json(summary)},
+            )
         )
-    )
+    except DBAPIError as error:
+        reraise_lock_failure(error)
 
 
-def reconcile(session: Session, byte_size: int, entries: int) -> Any:
-    """Seed or raise this tenant's baseline to measured retained usage; never lowers."""
+def reconcile(session: Session, scan: TenantScan) -> Any:
+    """Seed or raise a tenant's baseline; needs the operator role, runtime cannot call it."""
+    legacy_parts = [
+        {"object_key": key, "byte_size": size}
+        for key, size in scan.files.items()
+        if key.split("/")[2] == "uploads"
+    ]
     return session.execute(
-        sa.text("SELECT * FROM app.reconcile_storage(:bytes, :entries)"),
-        {"bytes": byte_size, "entries": entries},
+        sa.text(
+            "SELECT * FROM app.reconcile_storage(:bytes, :entries, :directories,"
+            " CAST(:legacy_parts AS jsonb))"
+        ),
+        {
+            "bytes": scan.byte_size,
+            "entries": scan.entries,
+            "directories": scan.directories,
+            "legacy_parts": canonical_json(legacy_parts),
+        },
     ).one()

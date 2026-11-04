@@ -13,10 +13,10 @@
 - `app/platform.py`, `app/platform_models.py`, `app/platform_admin.py`: onboarding, manual subscriptions, billing requests and controlled operator activation.
 - `app/uploads.py`: resumable, hash-bound private upload parts and quarantined finalization.
 - `app/upload_cleanup.py`, `app/temporary_storage.py`: explicit admin cleanup plans, upload-scoped holds, bounded local temporary-file and reserved-object validation/deletion and crash-safe intent replay. `upload_cleanup.py` also holds the versioned storage policy constants (orphan grace, reservation TTL, writer margin). See [ADR 0007](decisions/0007-temporary-upload-cleanup.md).
-- `app/storage_quota.py`: reservation ledger client (`reserve` in its own transaction and dedicated pool, `write` with the expiry margin, `link` in the business transaction, cleanup-completion release and reconcile calls). See [ADR 0008](decisions/0008-storage-reservations-and-orphan-cleanup.md).
-- `app/orphan_cleanup.py`: explicit admin plan/execute API for reservation-backed orphans (`/api/v1/storage/orphan-cleanup`).
+- `app/storage_quota.py`: reservation ledger client (`reserve` in its own transaction and dedicated pool, `write` with the expiry margin, `link` in the business transaction, bounded lock waits, the cleanup planning and completion calls, and the operator-only reconcile call). See [ADR 0008](decisions/0008-storage-reservations-and-orphan-cleanup.md).
+- `app/orphan_cleanup.py`: explicit admin plan/execute API for reservation-backed document and artifact orphans (`/api/v1/storage/orphan-cleanup`). It never touches upload parts.
 - `app/storage_sweep.py`: report-only per-tenant sweep with lease, counts and drift (Celery beat `cgl.storage_sweep`).
-- `app/storage_admin.py`: operator CLI (`reconcile` seeds/raises ledgers from a locked scan; `report` prints counts). Runtime role only.
+- `app/storage_admin.py`: operator CLI (`reconcile` seeds/raises ledgers from a locked scan; `report` prints counts and unfinished plan IDs). `reconcile` submits its measurement as the `cgl_storage_operator` role; everything else uses the runtime role.
 - `app/inquiries.py`: separately configured public inquiry persistence without operations credentials.
 - `app/parser_service.py`, `app/parser_runner.py`, `app/parser_client.py`: worker-only parsing transport and resource-limited, credential-free parsing children.
 - `app/database`: foundational metadata, runtime/auth pools, guarded local provisioning settings.

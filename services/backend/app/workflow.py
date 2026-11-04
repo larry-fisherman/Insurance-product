@@ -5,7 +5,7 @@ from collections import defaultdict
 from datetime import date
 from decimal import Decimal
 from typing import Any, Literal
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
@@ -68,7 +68,10 @@ def ensure_open(submission: Submission) -> None:
         )
 
 
-def idempotent(scope: Scope, operation: str, key: str | None, value: Any) -> tuple[UUID, bool]:
+def idempotent(
+    scope: Scope, operation: str, key: str | None, value: Any, *, stable_id: bool = False
+) -> tuple[UUID, bool]:
+    """``stable_id`` derives the ID from the key, so it survives a rolled-back first attempt."""
     if not key or not 8 <= len(key) <= 100:
         fail(400, "IDEMPOTENCY_REQUIRED", "Supply an Idempotency-Key of 8–100 characters.")
     assert key is not None
@@ -92,7 +95,11 @@ def idempotent(scope: Scope, operation: str, key: str | None, value: Any) -> tup
                 "This request key was already used with different information.",
             )
         return existing.response_id, True
-    response_id = uuid4()
+    response_id = (
+        uuid5(NAMESPACE_URL, f"cgl:idempotent:{scope.tenant_id}:{operation}:{key}")
+        if stable_id
+        else uuid4()
+    )
     scope.session.add(
         IdempotencyRecord(
             tenant_id=scope.tenant_id,

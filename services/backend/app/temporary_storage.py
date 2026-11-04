@@ -191,9 +191,16 @@ def inspect_reserved(
 
 def inventory_reserved(
     store: FileStore, items: list[tuple[str, UUID, int, datetime]]
-) -> list[ReservedObject]:
+) -> tuple[list[ReservedObject], int]:
+    """Safe objects for a plan, plus the count of unsafe ones left out and untouched."""
+    objects, unsafe = [], 0
     with store.write_lock():
-        return [inspect_reserved(store, *item) for item in items]
+        for item in items:
+            try:
+                objects.append(inspect_reserved(store, *item))
+            except (OSError, ValueError, TemporaryStorageError):
+                unsafe += 1
+    return objects, unsafe
 
 
 def remove_reserved(

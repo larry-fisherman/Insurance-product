@@ -707,6 +707,7 @@ def upload(
             "sha256": digest(data),
             "supersedes": supersedes_id,
         },
+        stable_id=True,  # A retry after a rollback rebinds to the same storage reservation.
     )
     if exists:
         return document_record(get(scope.session, DocumentVersion, object_id))

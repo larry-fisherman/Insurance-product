@@ -89,9 +89,9 @@ full-up: db-config db-up app-config app-roles db-migrate-native
 	$(FULL_COMPOSE) up -d --wait --wait-timeout 120 redis parser api web inquiries marketing
 
 # Seed/reconcile the storage reservation ledger from the private volume (ADR 0008).
-# Runs as the runtime role inside the API image; it only raises counters.
+# Runs in the API image as the narrow operator role; it only raises counters.
 storage-reconcile:
-	$(FULL_COMPOSE) run --rm --no-deps api python -m app.storage_admin reconcile
+	$(FULL_COMPOSE) --env-file $(BACKEND)/.env.storage-operator run --rm --no-deps storage-admin python -m app.storage_admin reconcile
 
 storage-report:
 	$(FULL_COMPOSE) run --rm --no-deps api python -m app.storage_admin report

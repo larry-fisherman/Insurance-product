@@ -33,3 +33,16 @@ class DatabaseSettings(BaseSettings):
         if parsed.drivername != "postgresql+psycopg" or not parsed.database or not parsed.username:
             raise ValueError("Database URL requires postgresql+psycopg, a user, and a database")
         return value
+
+
+class StorageOperatorSettings(BaseSettings):
+    """The reconcile credential, kept out of the settings API and worker processes load."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="CGL_",
+        env_file=Path(__file__).resolve().parents[2] / ".env.storage-operator",
+        extra="ignore",
+        hide_input_in_errors=True,
+    )
+
+    storage_operator_database_url: SecretStr

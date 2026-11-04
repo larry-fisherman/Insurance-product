@@ -334,10 +334,12 @@ def test_cleanup_plan_waits_for_inflight_finalization(
         return original(*args, **kwargs)
 
     monkeypatch.setattr(api, "store_document", paused)
-    # Advance only cleanup's clock to make it eligible while the finalizer
-    # still owns the upload lock; no production expiry rules are weakened.
-    future = now() + timedelta(days=3)
-    monkeypatch.setattr(upload_cleanup, "now", lambda: future)
+    # Make the upload eligible for cleanup in the database, whose planning definer reads
+    # the database clock, and rewind only the finalizer's view so it still sees a live
+    # upload while it owns the upload lock; no production expiry rules are weakened.
+    age(database_engine, workspace_settings, actor, identifier)
+    past = now() - timedelta(days=4)
+    monkeypatch.setattr("app.uploads.now", lambda: past)
     with ThreadPoolExecutor(max_workers=2) as pool:
         finalizing = pool.submit(post, client, f"/uploads/{identifier}/finalize", {})
         assert entered.wait(timeout=15)
@@ -491,3 +493,57 @@ def test_completion_releases_reserved_and_pre_ledger_parts_exactly_once(
             )
         )
     assert states == {("released", UUID(planned["id"]))}
+
+
+def test_separate_plans_listing_one_pre_ledger_part_lower_the_baseline_once(
+    client: TestClient,
+    workspace_settings: Settings,
+    database_engine: Engine,
+) -> None:
+    from app.database.runtime import Database
+    from app.platform_models import StorageGlobalUsage, StorageUsage
+    from app.storage import FileStore
+    from app.storage_admin import reconcile_tenant
+
+    submission, actor = demo(client)
+    tenant, user = UUID(actor["tenant_id"]), UUID(actor["user_id"])
+    identifier = upload(client, submission)
+    store = storage(workspace_settings)
+    assert isinstance(store, FileStore)
+    shared = b"fictional pre-ledger part listed by two plans"
+    store.put(
+        f"tenants/{tenant}/uploads/{identifier}/0-{uuid4().hex}",
+        shared,
+        "application/octet-stream",
+    )
+    # Other retained pre-ledger bytes that a second lowering would wrongly uncharge.
+    other = b"fictional unrelated pre-ledger bytes that stay charged"
+    store.put(f"tenants/{tenant}/documents/{uuid4()}/original", other, "application/pdf")
+    db = Database(workspace_settings)
+    try:
+        assert reconcile_tenant(db, store, tenant, user).raised_bytes == len(shared) + len(other)
+    finally:
+        db.close()
+
+    def counters() -> tuple[int, int]:
+        with database_engine.connect() as connection:
+            usage = connection.execute(
+                sa.select(StorageUsage).where(StorageUsage.tenant_id == tenant)
+            ).one()
+            total = connection.scalar(
+                sa.select(StorageGlobalUsage.charged_bytes).where(StorageGlobalUsage.id == 1)
+            )
+        return int(usage.committed_bytes), int(total or 0)
+
+    age(database_engine, workspace_settings, actor, identifier)
+    first = plan(client, identifier)
+    second = plan(client, identifier)
+    assert first["id"] != second["id"]
+    baseline, _ = counters()
+    assert execute(client, identifier, first).status_code == 200
+    after_first = counters()
+    assert after_first[0] == baseline - len(shared)
+    completed = execute(client, identifier, second)
+    assert completed.status_code == 200, completed.text
+    assert completed.json()["completion_summary"]["removed_objects"] == 0
+    assert counters() == after_first  # The second plan removed nothing and lowers nothing.

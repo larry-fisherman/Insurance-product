@@ -59,7 +59,7 @@ def claim(configuration: Settings, db: Database, tenant_id: UUID, user_id: UUID)
 
 
 def counts(session: Session, tenant_id: UUID, scan: TenantScan) -> dict[str, int]:
-    from app.orphan_cleanup import candidates
+    from app.orphan_cleanup import candidates, unlinked_upload_parts
 
     reserved = set(
         session.scalars(
@@ -71,11 +71,19 @@ def counts(session: Session, tenant_id: UUID, scan: TenantScan) -> dict[str, int
         referenced.update(session.scalars(sa.select(model.object_key)))
     orphans = list(session.scalars(candidates(now())))
     legacy = {key: size for key, size in scan.files.items() if key not in reserved | referenced}
+    parts = len(list(session.scalars(unlinked_upload_parts(now()))))
+    planned = session.scalar(
+        sa.select(sa.func.count())
+        .select_from(StorageReservation)
+        .where(StorageReservation.state == "cleanup_planned")
+    )
     usage = session.get(StorageUsage, tenant_id)
     ledger_bytes = (usage.reserved_bytes + usage.committed_bytes) if usage else 0
     return {
         "orphan_candidates": len(orphans),
         "expired_absent": sum(1 for row in orphans if row.object_key not in scan.files),
+        "unlinked_upload_parts": parts,
+        "cleanup_planned": int(planned or 0),
         "legacy_unreserved": len(legacy),
         "legacy_unreserved_bytes": sum(legacy.values()),
         "anomalies": scan.anomalies,

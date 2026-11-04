@@ -54,6 +54,22 @@ def test_tenant_scan_counts_only_that_tenant_like_adr_0006(tmp_path: Path) -> No
     assert store.scan_tenant(uuid4()).entries == 0
 
 
+def test_symlinked_ancestor_cannot_redirect_a_write_into_another_tenants_tree(
+    tmp_path: Path,
+) -> None:
+    first, second = uuid4(), uuid4()
+    store = FileStore(tmp_path)
+    store.put(object_key(second), b"12345678", "application/octet-stream")
+    (tmp_path / "tenants" / str(first)).mkdir()
+    (tmp_path / "tenants" / str(first) / "uploads").symlink_to(
+        tmp_path / "tenants" / str(second) / "uploads"
+    )
+    before = set((tmp_path / "tenants" / str(second)).rglob("*"))
+    with pytest.raises(StorageCapacityError, match="^STORAGE_QUOTA_UNAVAILABLE$"):
+        store.put(object_key(first), b"redirected", "application/octet-stream")
+    assert set((tmp_path / "tenants" / str(second)).rglob("*")) == before
+
+
 def test_s3_writes_fail_closed_before_contacting_provider() -> None:
     # No SDK client/credentials are needed: the gate must reject the write
     # before any provider operation can occur.

@@ -115,7 +115,11 @@ def subscription(scope: Scope, *, lock: bool = False) -> Subscription:
 def require_capacity(
     scope: Scope, kind: Literal["seats", "submissions", "processing"] = "processing"
 ) -> None:
-    get(scope.session, Tenant, scope.tenant_id, lock=True)
+    # FOR NO KEY UPDATE still serializes capacity decisions but, unlike FOR UPDATE, lets the
+    # separate reservation transaction's foreign key check on this row proceed (ADR 0008).
+    locked = sa.select(Tenant.id).where(Tenant.id == scope.tenant_id)
+    if scope.session.scalar(locked.with_for_update(key_share=True)) is None:
+        fail(404, "NOT_FOUND", "Record not found in this agency.")
     row = subscription(scope, lock=True)
     if row.status not in {"manual_pilot", "active"} or (
         row.period_end is not None and row.period_end <= now()

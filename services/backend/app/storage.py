@@ -54,6 +54,8 @@ class TenantScan:
     byte_size: int = 0
     entries: int = 0
     files: dict[str, int] = field(default_factory=dict)  # Relative key -> byte size.
+    # Structural directories that exist: "tenant" and the names directly beneath it.
+    directories: list[str] = field(default_factory=list)
     anomalies: int = 0  # Symlinks or special files: never followed, never charged as bytes.
 
 
@@ -89,6 +91,7 @@ class FileStore:
             result.anomalies += 1
             return result
         result.entries += 1
+        result.directories.append("tenant")
         pending = [top]
         while pending:
             directory = pending.pop()
@@ -98,6 +101,8 @@ class FileStore:
                     if entry.is_symlink():
                         result.anomalies += 1
                     elif entry.is_dir(follow_symlinks=False):
+                        if directory == top:
+                            result.directories.append(entry.name)
                         pending.append(Path(entry.path))
                     elif entry.is_file(follow_symlinks=False):
                         size = entry.stat(follow_symlinks=False).st_size
@@ -113,6 +118,18 @@ class FileStore:
         if not result.is_relative_to(self.root):
             raise ValueError("Invalid object path")
         return result
+
+    def refuse_redirected_parents(self, key: str) -> None:
+        """A symlinked ancestor could send one tenant's write into another's tree."""
+        directory = self.root
+        for component in key.split("/")[:-1]:
+            directory = directory / component
+            try:
+                mode = directory.lstat().st_mode
+            except FileNotFoundError:
+                return
+            if not stat.S_ISDIR(mode):
+                raise StorageCapacityError("STORAGE_QUOTA_UNAVAILABLE")
 
     def probe(self, key: str) -> tuple[int, str] | None:
         """Size and SHA-256 of a complete regular object, or None when absent."""
@@ -140,6 +157,7 @@ class FileStore:
             # must not race the orphan planner, which inventories under this lock.
             if not_after is not None and datetime.now(UTC) >= not_after:
                 raise StorageCapacityError("STORAGE_QUOTA_UNAVAILABLE")
+            self.refuse_redirected_parents(key)
             if path.exists():
                 raise FileExistsError("Private object already exists")
             path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)

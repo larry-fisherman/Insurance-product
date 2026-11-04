@@ -42,6 +42,14 @@ services:
     cpus: 2
     depends_on:
       redis: { condition: service_healthy }
+  # One-shot operator commands only. The sole service given the reconcile credential.
+  storage-admin:
+    <<: *app
+    profiles: [operator]
+    environment:
+      <<: *environment
+      CGL_STORAGE_OPERATOR_DATABASE_URL: postgresql+psycopg://cgl_storage_operator:${CGL_STORAGE_OPERATOR_PASSWORD:-}@postgres:5432/cgl_dev
+    healthcheck: { disable: true }
   scheduler:
     <<: *app
     command: celery -A app.worker:celery beat --loglevel=WARNING --schedule=/tmp/celerybeat
