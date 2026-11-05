@@ -21,7 +21,7 @@ dependencies = [
   "pypdf==6.21.4",
   "pypdfium2==5.14.0",
   "pyotp==2.10.0",
-  "python-multipart==0.0.32",
+  "python-multipart==0.0.33",
   "redis==6.4.0",
   "reportlab==5.1.0",
   "psycopg[binary]==3.3.6",
