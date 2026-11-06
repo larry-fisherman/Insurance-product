@@ -99,3 +99,14 @@ Notes:
 - `GET /api/v1/auth/config` is listed as public: the sign-in page reads the identity mode before a session exists. `/api/v1/docs` and `/api/v1/openapi.json` are not FastAPI API routes and are outside the matrix; their exposure is tracked under P0-A2.
 - The viewer case for review decisions sends the current `expected_version`, because the handler checks the optimistic version before the permission (`services/backend/app/api.py:863-864`, `services/backend/app/workflow.py:892`).
 - Not run for this batch: `make check-e2e`, `make evaluate`, `make verify-ocr`, scanner acceptance; not required by the batch.
+
+## Dead-code removal and prompt-version constant (audit Batch 2) — November 5, 2026
+
+Scope: no behaviour change. Removed the duplicate `get(...)` call in `audit_history` and the in-function `AppUser` re-import in `services/backend/app/api.py`, moved `timedelta` to the module import in `services/backend/app/workflow.py`, and added `PROMPT_VERSION = "cgl-evidence-2"` in `services/backend/app/domain/cgl.py`, used by both run-metadata sites in `services/backend/app/worker.py`. The recorded prompt version value is unchanged.
+
+| Check                                      | Result           | Evidence / limits                                                         |
+| ------------------------------------------ | ---------------- | ------------------------------------------------------------------------- |
+| `make check-api`                           | Pass; 119 passed | Ruff, Ruff format, mypy strict over 76 source files, non-database pytest. |
+| Agent gate (`make check && make check-db`) | Green            | `make check` includes `check-web`; `make check-db` on disposable DBs.     |
+
+Not run for this batch: `make check-e2e`, `make evaluate`, `make verify-ocr`, scanner acceptance; not required by the batch.

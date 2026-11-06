@@ -2,7 +2,7 @@
 
 import re
 from collections import defaultdict
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any, Literal
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
@@ -622,8 +622,6 @@ def readiness(session: Session, submission: Submission) -> dict[str, Any]:
             if start > covered_until:
                 break
             if finish >= covered_until:
-                from datetime import timedelta
-
                 covered_until = finish + timedelta(days=1)
         if covered_until <= submission.loss_required_end:
             missing.append(

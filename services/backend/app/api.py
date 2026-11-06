@@ -1202,7 +1202,6 @@ def task_queue(scope: Scoped) -> dict[str, Any]:
 @router.get("/submissions/{submission_id}/audit")
 def audit_history(submission_id: UUID, scope: Scoped) -> dict[str, Any]:
     scope.require("audit.read")
-    get(scope.session, Submission, submission_id)
     submission = get(scope.session, Submission, submission_id)
     ids = [
         submission_id,
@@ -1311,7 +1310,6 @@ def invite(
             "url": scope.configuration.public_origin + "/invite#token=" + quote(token),
         }
     email = payload.email.strip().lower()
-    from app.database.models import AppUser
 
     with database(request).identity() as identity_session:
         existing_member = identity_session.scalar(

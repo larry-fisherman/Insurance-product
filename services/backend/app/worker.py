@@ -34,7 +34,7 @@ from app.documents import (
     scan,
     validate_file,
 )
-from app.domain.cgl import PIPELINE_VERSION, group_key
+from app.domain.cgl import PIPELINE_VERSION, PROMPT_VERSION, group_key
 from app.domain.models import (
     CanonicalRevision,
     DocumentVersion,
@@ -316,7 +316,7 @@ def process_job(configuration: Settings, tenant_id: UUID, user_id: UUID, job_id:
                     "attempt": claimed_attempt,
                     "provider": configuration.extraction_provider,
                     "model": configuration.extraction_model or None,
-                    "prompt_version": "cgl-evidence-2",
+                    "prompt_version": PROMPT_VERSION,
                     "pipeline_version": PIPELINE_VERSION,
                     "parser_version": PARSER_VERSION,
                     "input_sha256": sha,
@@ -566,7 +566,7 @@ def process_job(configuration: Settings, tenant_id: UUID, user_id: UUID, job_id:
                                 "provider": configuration.extraction_provider,
                                 "model": configuration.extraction_model or None,
                                 "pipeline_version": PIPELINE_VERSION,
-                                "prompt_version": "cgl-evidence-2",
+                                "prompt_version": PROMPT_VERSION,
                                 "error_code": code,
                                 "input_tokens": None,
                                 "output_tokens": None,
