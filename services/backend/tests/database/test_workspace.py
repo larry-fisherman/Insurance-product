@@ -1431,3 +1431,115 @@ def test_invitation_creation_retry_recovers_same_link_and_revocation(client: Tes
     assert post(client, f"/invitations/{invitation_id}/revoke", {}).status_code == 200
     invitations = client.get("/api/v1/agency").json()["invitations"]
     assert next(item for item in invitations if item["id"] == invitation_id)["status"] == "revoked"
+
+
+def ready_package(
+    client: TestClient, configuration: Settings
+) -> tuple[str, dict[str, Any], str, dict[str, Any]]:
+    submission_id, actor = reviewed_workspace(client, configuration)
+    data = client.get("/api/v1/submissions/" + submission_id).json()
+    generated = post(
+        client,
+        f"/submissions/{submission_id}/packages",
+        {"expected_version": data["submission"]["row_version"]},
+    )
+    assert generated.status_code == 202, generated.text
+    package_id = generated.json()["id"]
+    process_pending(configuration, actor)
+    detail = client.get("/api/v1/packages/" + package_id).json()
+    assert detail["package"]["status"] == "ready", detail
+    return submission_id, actor, package_id, detail
+
+
+def approve(client: TestClient, detail: dict[str, Any]) -> Any:
+    return post(
+        client,
+        f"/packages/{detail['package']['id']}/approvals",
+        {
+            "manifest_hash": detail["package"]["manifest_hash"],
+            "attestation": "I reviewed these exact synthetic files and approve this package for test export.",
+        },
+    )
+
+
+def tamper_artifact(
+    configuration: Settings, actor: dict[str, Any], package_id: str, format: str
+) -> None:
+    from app.domain.models import PackageArtifact
+
+    db = Database(configuration)
+    try:
+        with db.tenant(UUID(actor["tenant_id"]), UUID(actor["user_id"])) as session:
+            key = session.scalar(
+                sa.select(PackageArtifact.object_key).where(
+                    PackageArtifact.package_id == UUID(package_id),
+                    PackageArtifact.format == format,
+                )
+            )
+    finally:
+        db.close()
+    assert key is not None
+    path = configuration.storage_path / key
+    original = path.read_bytes()
+    path.write_bytes(original[:-1] + bytes([original[-1] ^ 0xFF]))
+
+
+def export_events(configuration: Settings, actor: dict[str, Any], package_id: str) -> int:
+    from app.domain.models import ExportEvent
+
+    db = Database(configuration)
+    try:
+        with db.tenant(UUID(actor["tenant_id"]), UUID(actor["user_id"])) as session:
+            return int(
+                session.scalar(
+                    sa.select(sa.func.count())
+                    .select_from(ExportEvent)
+                    .where(ExportEvent.package_id == UUID(package_id))
+                )
+                or 0
+            )
+    finally:
+        db.close()
+
+
+def test_approval_refuses_tampered_artifact_bytes(
+    client: TestClient, workspace_settings: Settings
+) -> None:
+    _, actor, package_id, detail = ready_package(client, workspace_settings)
+    tamper_artifact(workspace_settings, actor, package_id, "xlsx")
+    refused = approve(client, detail)
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"]["code"] == "INTEGRITY_FAILURE"
+    assert client.get("/api/v1/packages/" + package_id).json()["approval"] is None
+
+
+def test_export_refuses_tampered_artifact_bytes_and_records_no_export(
+    client: TestClient, workspace_settings: Settings
+) -> None:
+    _, actor, package_id, detail = ready_package(client, workspace_settings)
+    approved = approve(client, detail)
+    assert approved.status_code == 200, approved.text
+    tamper_artifact(workspace_settings, actor, package_id, "pdf")
+    refused = client.get(f"/api/v1/packages/{package_id}/artifacts/pdf")
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"]["code"] == "INTEGRITY_FAILURE"
+    assert export_events(workspace_settings, actor, package_id) == 0
+
+
+def test_input_change_supersedes_package_for_approval_and_export(
+    client: TestClient, workspace_settings: Settings
+) -> None:
+    submission_id, actor, package_id, detail = ready_package(client, workspace_settings)
+    assert approve(client, detail).status_code == 200
+    document_id = client.get("/api/v1/submissions/" + submission_id).json()["documents"][0]["id"]
+    excluded = post(
+        client, f"/documents/{document_id}/exclude", {"reason": "Synthetic input change"}
+    )
+    assert excluded.status_code == 200, excluded.text
+    superseded = approve(client, detail)
+    assert superseded.status_code == 409, superseded.text
+    assert superseded.json()["detail"]["code"] == "PACKAGE_SUPERSEDED"
+    export = client.get(f"/api/v1/packages/{package_id}/artifacts/pdf")
+    assert export.status_code == 409, export.text
+    assert export.json()["detail"]["code"] == "APPROVAL_REQUIRED"
+    assert export_events(workspace_settings, actor, package_id) == 0

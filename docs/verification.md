@@ -82,3 +82,20 @@ Scope: the five-capability acceptance mapping in [review guide](review-guide.md#
 - Changed Markdown passed Prettier and local link/anchor checks; `git diff --check` passed.
 
 Docker was unavailable. Browser, Redis delivery, ClamAV ordinary-upload, and actual OCR acceptance were not rerun for this change; prior dated results remain historical. No customer data, paid-provider usage, deployment, or release authorization was performed. Parser breadth, complete contextual CGL semantics, domain-approved requirements, independent quality/security assessment, and customer-data gates remain open.
+
+## Invariant tests (audit Batch 1) — November 5, 2026
+
+Scope: tests only, no application behaviour change. Added a catalog-wide RLS check (`services/backend/tests/database/test_schema_invariants.py`), a route-by-role matrix (`services/backend/tests/database/test_route_permissions.py`) and approval/export tamper and supersession cases in `services/backend/tests/database/test_workspace.py`.
+
+| Check                                      | Result           | Evidence / limits                                                                                                                                                                                                              |
+| ------------------------------------------ | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `make check-api`                           | Pass; 119 passed | Ruff, Ruff format, mypy strict over 76 source files, non-database pytest.                                                                                                                                                      |
+| `make check-db`                            | Pass; 130 passed | Disposable `cgl_test_*` databases on the loopback development PostgreSQL. Includes the new RLS catalog, runtime-denied, DELETE-grant, 401/403 matrix, `INTEGRITY_FAILURE`, `PACKAGE_SUPERSEDED` and `APPROVAL_REQUIRED` cases. |
+| Agent gate (`make check && make check-db`) | Green            | `make check` includes `check-web`.                                                                                                                                                                                             |
+
+Notes:
+
+- `app.agency_activation` is classified as "forced RLS, no runtime policy or grant" and is reached only through `app.activate_agency(text,uuid,text)`. It is not a global table.
+- `GET /api/v1/auth/config` is listed as public: the sign-in page reads the identity mode before a session exists. `/api/v1/docs` and `/api/v1/openapi.json` are not FastAPI API routes and are outside the matrix; their exposure is tracked under P0-A2.
+- The viewer case for review decisions sends the current `expected_version`, because the handler checks the optimistic version before the permission (`services/backend/app/api.py:863-864`, `services/backend/app/workflow.py:892`).
+- Not run for this batch: `make check-e2e`, `make evaluate`, `make verify-ocr`, scanner acceptance; not required by the batch.
