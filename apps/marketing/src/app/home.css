@@ -1,0 +1,375 @@
+/* Home page only. Imported by page.tsx; every rule is scoped to .home. */
+body:has(.home) {
+  --home-nav-h: 80px;
+}
+
+/* Floating pill nav: stays in flow, and .home is pulled up by the same height. */
+body:has(.home) .site-header {
+  --focus-ring: var(--color-focus-on-dark);
+  position: relative;
+  z-index: 2;
+  width: calc(100% - 32px);
+  max-width: 1320px;
+  height: calc(var(--home-nav-h) - 16px);
+  margin: 16px auto 0;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--hero-nav-surface);
+  color: var(--color-surface-alt);
+}
+body:has(.home) .site-header .brand {
+  display: inline-flex;
+  align-items: center;
+}
+body:has(.home) .site-header .brand span {
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  margin-right: 10px;
+  border-radius: 50%;
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-size: 20px;
+  line-height: 1;
+}
+body:has(.home) .site-header nav {
+  gap: 4px;
+}
+body:has(.home) .site-header nav a {
+  padding: 8px 16px;
+  border-radius: 999px;
+}
+body:has(.home) .site-header nav a:hover,
+body:has(.home) .site-header nav a:focus-visible {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  text-decoration: none;
+}
+body:has(.home) .header-actions .button {
+  border-color: var(--color-surface-alt);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-surface-alt);
+}
+body:has(.home) .header-actions .button:hover {
+  border-color: var(--color-bg);
+  background: var(--color-bg);
+  color: var(--color-ink);
+}
+
+.home {
+  margin-top: calc(-1 * var(--home-nav-h));
+}
+.home h2 {
+  letter-spacing: -0.03em;
+}
+
+/* Hero */
+.home .hero {
+  --focus-ring: var(--color-focus-on-dark);
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 40px;
+  min-height: max(640px, calc(100svh - 30px));
+  padding: calc(var(--home-nav-h) + 48px) 5% 56px;
+  overflow: hidden;
+  border-radius: 28px 28px 0 0;
+  background-color: var(--color-dark);
+  color: var(--color-surface-alt);
+}
+.home .hero-media {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(var(--hero-scrim), var(--hero-scrim)), var(--hero-media-image);
+  background-position: center;
+  background-size: cover;
+}
+.home .hero-copy {
+  position: relative;
+  max-width: 860px;
+}
+.home .hero .eyebrow {
+  color: var(--color-surface-alt);
+}
+.home .hero h1 {
+  margin-bottom: 24px;
+  color: var(--color-surface-alt);
+  font-size: clamp(40px, 6.4vw, 92px);
+  font-weight: 500;
+  letter-spacing: -0.03em;
+}
+.home .hero h1 em {
+  color: var(--color-surface-alt);
+}
+.home .hero-copy > p {
+  max-width: 520px;
+  color: var(--color-surface-alt);
+  font-size: 16px;
+}
+.home .hero .actions {
+  flex-wrap: wrap;
+}
+.home .hero .button {
+  gap: 14px;
+  min-height: 54px;
+  padding: 7px 8px 7px 24px;
+  border-color: var(--color-surface-alt);
+  border-radius: 999px;
+  background: var(--color-surface-alt);
+  color: var(--color-ink);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.home .hero .button:hover {
+  border-color: var(--color-bg);
+  background: var(--color-bg);
+}
+.home .hero-cta-arrow {
+  display: inline-grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  color: var(--color-on-action);
+  font-size: 15px;
+}
+.home .hero .text-link {
+  color: var(--color-surface-alt);
+}
+.home .hero-copy small {
+  color: var(--color-surface-alt);
+  font-size: 11px;
+}
+.home .hero-scroll {
+  position: relative;
+  flex-shrink: 0;
+  padding-bottom: 5px;
+  border-bottom: 1px solid currentColor;
+  color: var(--color-surface-alt);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.home .hero-scroll::after {
+  content: "↓" / "";
+  margin-left: 8px;
+}
+
+/* Statement */
+.home .statement {
+  padding: 120px 7%;
+  background: var(--color-bg);
+  text-align: center;
+}
+.home .statement .eyebrow {
+  color: var(--color-accent);
+}
+.home .statement .eyebrow::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 10px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  vertical-align: 1px;
+}
+.home .statement h2 {
+  font-weight: 500;
+}
+.home .statement em {
+  color: var(--color-muted);
+}
+.home .statement-pill {
+  display: inline-block;
+  width: 1.5em;
+  height: 0.72em;
+  border-radius: 999px;
+  background-image: var(--statement-pill-image);
+  vertical-align: baseline;
+}
+.home .statement p {
+  max-width: 620px;
+  margin: 30px auto 0;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+/* Promise strip and demo */
+.home .promise {
+  display: grid;
+  grid-template-columns: 1fr minmax(0, 560px);
+  gap: 8%;
+  align-items: center;
+  padding: 90px 7%;
+  border-top: 1px solid var(--line);
+}
+.home .promise h2 {
+  margin-bottom: 30px;
+  font-size: clamp(30px, 3.2vw, 44px);
+  font-weight: 500;
+  line-height: 1.12;
+}
+.home .promise-list {
+  margin: 0 0 24px;
+  padding: 0;
+  list-style: none;
+}
+.home .promise-list li {
+  padding: 16px 0;
+  border-top: 1px solid var(--line);
+  color: var(--color-ink);
+  font-size: 17px;
+  line-height: 1.4;
+}
+.home .promise-caption {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.home .demo {
+  border-radius: 20px;
+  overflow: hidden;
+  transform: none;
+}
+/* The card clips overflow and the buttons touch its edges, so the ring sits inset. */
+.home .demo-controls button:focus-visible {
+  outline-offset: -3px;
+}
+.home .annotation {
+  display: block;
+  margin-top: 20px;
+  color: var(--muted);
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-style: italic;
+  text-align: center;
+}
+
+/* Workflow cards */
+.home .workflow-section {
+  padding: 90px 7%;
+  background: var(--color-surface-alt);
+}
+.home .workflow-section h2 {
+  margin-bottom: 22px;
+  font-weight: 500;
+}
+.home .workflow-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 20px;
+  margin: 44px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.home .workflow-list li {
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--color-bg);
+}
+.home .workflow-list li > span {
+  display: block;
+  margin-bottom: 26px;
+  color: var(--color-accent);
+  font-family: var(--font-display);
+  font-size: 28px;
+}
+.home .workflow-list h3 {
+  margin-bottom: 9px;
+  font-family: var(--font-display);
+  font-size: 19px;
+}
+.home .workflow-list p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+/* Security band */
+.home .security-band {
+  --focus-ring: var(--color-focus-on-dark);
+  padding: 90px 8%;
+  background: var(--color-action);
+  color: var(--color-surface-alt);
+  text-align: center;
+}
+.home .security-band .eyebrow {
+  color: var(--color-on-dark-muted);
+}
+.home .security-band h2 {
+  color: var(--color-surface-alt);
+  font-weight: 500;
+}
+.home .security-band p {
+  max-width: 580px;
+  margin: 0 auto 28px;
+  color: var(--color-surface-alt);
+  font-size: 14px;
+}
+.home .security-band .button {
+  border-radius: 999px;
+}
+
+/* Closing CTA */
+.home .cta {
+  max-width: none;
+  padding: 90px 7%;
+}
+.home .cta h2 {
+  font-weight: 500;
+}
+.home .cta .button {
+  flex-shrink: 0;
+  border-radius: 999px;
+}
+
+@media (max-width: 1000px) {
+  .home .promise {
+    gap: 40px;
+    grid-template-columns: 1fr;
+  }
+  .home .workflow-list {
+    grid-template-columns: 1fr;
+  }
+  .home .workflow-list li > span {
+    margin-bottom: 14px;
+  }
+}
+@media (max-width: 720px) {
+  body:has(.home) .site-header {
+    width: calc(100% - 24px);
+  }
+  .home .hero {
+    border-radius: 20px 20px 0 0;
+    padding: calc(var(--home-nav-h) + 40px) 6% 44px;
+  }
+  .home .hero-scroll {
+    display: none;
+  }
+  .home .hero-copy > p {
+    font-size: 15px;
+  }
+  .home .statement,
+  .home .promise,
+  .home .workflow-section,
+  .home .security-band {
+    padding: 60px 7%;
+  }
+  .home .statement h2 {
+    font-size: 32px;
+  }
+  .home .promise-demo {
+    width: 100%;
+  }
+  .home .cta {
+    padding: 55px 7%;
+  }
+}

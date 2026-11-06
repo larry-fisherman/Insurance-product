@@ -85,13 +85,19 @@ export function Status({ value }: { value: string }) {
     <span
       className={
         "badge " +
-        (["approved", "exported", "completed", "clean", "approve", "correct"].includes(
-          value,
-        )
-          ? "green"
-          : ["failed", "conflict", "quarantined", "unreviewed"].includes(value)
-            ? "amber"
-            : "")
+        (["approved", "exported"].includes(value)
+          ? "tone-approved"
+          : ["completed", "clean", "approve", "correct"].includes(value)
+            ? "tone-done"
+            : ["failed", "rejected"].includes(value)
+              ? "tone-error"
+              : value === "conflict"
+                ? "tone-conflict"
+                : ["quarantined", "unreviewed", "needs_review"].includes(value)
+                  ? "tone-warning"
+                  : value === "missing"
+                    ? "tone-missing"
+                    : "")
       }
     >
       {label(value)}

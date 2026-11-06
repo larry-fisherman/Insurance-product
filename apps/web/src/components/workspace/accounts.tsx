@@ -102,7 +102,7 @@ export function Dashboard({ me }: { me: Me }) {
         />{" "}
         Show my assigned submissions
       </label>
-      <div className="metrics">
+      <div className="metrics dashboard-metrics">
         {[
           ["active_submissions", "Active submissions"],
           ["open_discrepancies", "Discrepancies to resolve"],

@@ -7,6 +7,7 @@
 - `apps/marketing/src/app`: public product, workflow, security, pricing/demo/contact and isolated inquiry routes.
 - `apps/web/src/app`: operations, login/MFA, activation/invitation, agency selection and onboarding routes.
 - `apps/web/src/components/workspace`: account/dashboard, review/evidence, submission/documents/packages, tasks/settings, and shell components.
+- `packages/web-config/tokens.css`: every color, scrim, shadow and status token for both web apps, imported by each root layout before its `globals.css`. Stylesheets may not hold their own colors; `apps/web/tests/design-tokens.test.ts` enforces this and the contrast pairings. Home-page layout is in `apps/marketing/src/app/home.css`. See [ADR 0009](decisions/0009-shared-design-tokens-and-fonts.md).
 - `apps/web/src/lib/workspace-api.ts`: bounded same-origin API client consuming generated workspace contracts; generated OpenAPI is under `packages/contracts`.
 - `services/backend/app/identity.py`: Argon2/TOTP/recovery, opaque sessions, CSRF/origin, agency scope, role resolution.
 - `app/oidc.py`: configured OIDC code/PKCE flow and signed identity validation; live provider acceptance remains open.

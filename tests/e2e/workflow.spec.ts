@@ -1,4 +1,77 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { test, expect, type Page } from "@playwright/test";
+
+const axeSource = readFileSync(
+  path.resolve(__dirname, "../../node_modules/axe-core/axe.min.js"),
+  "utf8",
+);
+
+// Moves the pointer to a viewport point with no control under it, so no hover
+// style shows in a screenshot.
+async function parkPointer(page: Page) {
+  const point = await page.evaluate(() => {
+    const controls = "a, button, input, select, textarea, summary, label, [role=button]";
+    for (let y = 4; y < window.innerHeight; y += 24) {
+      for (let x = window.innerWidth - 4; x > 0; x -= 24) {
+        const element = document.elementFromPoint(x, y);
+        if (element && !element.closest(controls)) return { x, y };
+      }
+    }
+    return { x: 0, y: 0 };
+  });
+  await page.mouse.move(point.x, point.y);
+}
+
+// Package & approval evidence, taken between measured stages: a screenshot at
+// 1440px and 390px from the top of the page with the pointer off every control,
+// plus axe color-contrast and horizontal-overflow checks at both widths. The
+// default 1440px viewport is restored afterwards.
+async function reviewPackageState(page: Page, state: string) {
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 });
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await parkPointer(page);
+    await page.screenshot({
+      path:
+        ".artifacts/visual-review/package-approval-" +
+        state +
+        (width === 390 ? "-390" : "") +
+        ".png",
+      fullPage: true,
+    });
+    const overflow = await page.evaluate(() => ({
+      scrollWidth: document.documentElement.scrollWidth,
+      innerWidth: window.innerWidth,
+    }));
+    expect
+      .soft(overflow.scrollWidth, `Package & approval ${state} at ${width}px overflow`)
+      .toBeLessThanOrEqual(overflow.innerWidth);
+    await page.evaluate(axeSource);
+    const contrast = await page.evaluate(async () => {
+      const axe = (window as unknown as { axe: any }).axe;
+      const results = await axe.run(document, {
+        runOnly: { type: "rule", values: ["color-contrast"] },
+      });
+      return {
+        passes: results.passes.flatMap((rule: any) => rule.nodes).length,
+        violations: results.violations.flatMap((rule: any) =>
+          rule.nodes.map((node: any) => ({
+            target: node.target.join(" "),
+            summary: node.failureSummary,
+          })),
+        ),
+      };
+    });
+    expect
+      .soft(contrast.violations, `Package & approval ${state} at ${width}px contrast`)
+      .toEqual([]);
+    expect
+      .soft(contrast.passes, `Package & approval ${state} at ${width}px judged text`)
+      .toBeGreaterThan(0);
+  }
+  await page.setViewportSize({ width: 1440, height: 1000 });
+}
 
 async function agencyGet(page: Page, path: string) {
   const me = await (await page.request.get("/api/v1/me")).json();
@@ -143,6 +216,7 @@ test("fictional brokerage reviews evidence, approves exact files, and exports", 
     });
     await expect(page.getByRole("link", { name: "Export PDF" })).toHaveCount(0);
   });
+  await reviewPackageState(page, "before-approval");
   const approvedBytes = await measuredStage(
     "Approve and inspect the exact PDF",
     budgets.approval,
@@ -175,6 +249,7 @@ test("fictional brokerage reviews evidence, approves exact files, and exports", 
       return bytes;
     },
   );
+  await reviewPackageState(page, "after-approval");
   await measuredStage(
     "Export identical bytes and verify history",
     budgets.export,

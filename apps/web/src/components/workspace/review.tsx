@@ -130,7 +130,7 @@ export function Evidence({ source, data }: { source: Source; data: WorkspaceData
                     {cell.coordinate}
                     {cell.hidden_column ? " (hidden)" : ""}
                   </th>
-                  <td>
+                  <td className="raw-value">
                     <mark>{cell.raw_value}</mark>
                   </td>
                   <td>{cell.number_format}</td>

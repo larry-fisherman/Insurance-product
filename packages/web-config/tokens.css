@@ -1,0 +1,81 @@
+/*
+ * Shared design tokens for apps/web and apps/marketing. Plain CSS only: this file
+ * carries no operations configuration across the public/app build boundary.
+ * Every color lives here, once. Stylesheets use the semantic layer, never the palette.
+ * Pairing limits and contrast ratios are enforced by apps/web/tests/design-tokens.test.ts.
+ */
+:root {
+  /* Palette */
+  --palette-white: #ffffff;
+  --palette-off-white: #f5f6f2;
+  --palette-ink: #131910;
+  --palette-body: #2d3329;
+  --palette-moss: #4e533e;
+  --palette-fern: #47543b;
+  --palette-forest: #273520;
+  --palette-night: #162311;
+  --palette-bark: #2e3524;
+  --palette-sage: #969c91;
+  --palette-olive: #6d703b;
+
+  /* Semantic */
+  --color-bg: var(--palette-white);
+  --color-surface-alt: var(--palette-off-white);
+  --color-ink: var(--palette-ink);
+  --color-text: var(--palette-body);
+  --color-muted: var(--palette-moss);
+  --color-link: var(--palette-fern);
+  --color-action: var(--palette-forest);
+  --color-on-action: var(--palette-white);
+  --color-dark: var(--palette-night);
+  --color-dark-raised: var(--palette-bark);
+  --color-dark-active: rgb(255 255 255 / 0.08);
+  --color-on-dark-muted: var(--palette-sage);
+  --color-on-dark-line: rgb(255 255 255 / 0.18);
+  --color-accent: var(--palette-olive);
+  --color-border: color-mix(in srgb, var(--palette-sage) 40%, transparent);
+
+  /* Focus. Dark surfaces set --focus-ring to --color-focus-on-dark. */
+  --color-focus: var(--palette-ink);
+  --color-focus-on-dark: var(--palette-off-white);
+  --focus-ring: var(--color-focus);
+
+  /* Home hero. Swap in a licensed local image by changing --hero-media-image only. */
+  --hero-scrim: rgb(19 25 16 / 0.65);
+  --hero-nav-surface: rgb(19 25 16 / 0.7);
+  --hero-media-image:
+    radial-gradient(55% 70% at 85% 20%, var(--palette-fern) 0%, transparent 100%),
+    linear-gradient(135deg, var(--palette-night) 0%, var(--palette-bark) 100%);
+  --statement-pill-image: linear-gradient(
+    90deg,
+    var(--palette-forest) 0%,
+    var(--palette-olive) 100%
+  );
+
+  /* Shadows */
+  --shadow-soft: 0 3px 9px rgb(19 25 16 / 0.02);
+  --shadow-raised: 0 14px 60px rgb(19 25 16 / 0.08);
+  --shadow-offset: 15px 20px 0 var(--color-surface-alt);
+  --shadow-selected: inset 0 0 0 1px var(--color-muted);
+  --shadow-selected-strong: inset 0 0 0 1px var(--color-link);
+
+  /* Status. Separate from the palette; every status also has a label and a shape. */
+  --status-approved-text: #ffffff;
+  --status-approved-bg: #114f8a;
+  --status-approved-panel-text: #114f8a;
+  --status-approved-panel-bg: #e4effa;
+  --status-error-text: #9f1d1d;
+  --status-error-bg: #fcebea;
+  --status-blocker-text: #7a1f5c;
+  --status-blocker-bg: #f8e9f3;
+  --status-conflict-text: #8f3f00;
+  --status-conflict-bg: #fdeedf;
+  --status-warning-text: #5c4300;
+  --status-warning-bg: #ffe9a8;
+  --status-missing-text: #4a4a6a;
+  --status-missing-bg: #eeeef5;
+  --status-done-text: var(--color-ink);
+  --status-done-bg: var(--color-surface-alt);
+  --status-neutral-text: var(--color-muted);
+  --status-neutral-bg: var(--color-surface-alt);
+}

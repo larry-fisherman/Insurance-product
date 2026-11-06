@@ -1,9 +1,11 @@
 import Link from "next/link";
 import { Demo } from "../components/demo";
+import "./home.css";
 export default function Home() {
   return (
-    <>
+    <div className="home">
       <section className="hero">
+        <div className="hero-media" aria-hidden="true" />
         <div className="hero-copy">
           <span className="eyebrow">
             Commercial general liability / Broker operations
@@ -11,9 +13,7 @@ export default function Home() {
           <h1>
             Bring clarity to
             <br />
-            your next
-            <br />
-            <em>submission.</em>
+            your next <em>submission.</em>
           </h1>
           <p>
             Upload the documents. Find missing or conflicting information. Review the
@@ -21,7 +21,7 @@ export default function Home() {
           </p>
           <div className="actions">
             <Link href="/request-demo" className="button">
-              See the workflow →
+              See the workflow <span className="hero-cta-arrow">→</span>
             </Link>
             <Link href="/how-it-works" className="text-link">
               How it works ↗
@@ -29,19 +29,17 @@ export default function Home() {
           </div>
           <small>Evidence stays connected. Brokers keep the final say.</small>
         </div>
-        <div className="hero-demo">
-          <Demo />
-          <span className="annotation">
-            From scattered sources to a recorded decision.
-          </span>
-        </div>
+        <a className="hero-scroll" href="#statement">
+          Scroll down
+        </a>
       </section>
-      <section className="statement">
+      <section className="statement" id="statement">
         <span className="eyebrow">One shared submission workspace</span>
         <h2>
           The application says one thing.
           <br />
-          The schedule says another.
+          The schedule says <span className="statement-pill" aria-hidden="true" />{" "}
+          another.
           <br />
           <em>Make the difference visible.</em>
         </h2>
@@ -50,6 +48,27 @@ export default function Home() {
           facts they support. Review amounts in context, follow up on gaps, and preserve
           the reason behind every material decision.
         </p>
+      </section>
+      <section className="promise">
+        <div className="promise-copy">
+          <h2>From documents to a reviewed submission</h2>
+          <ol className="promise-list">
+            <li>Upload the documents.</li>
+            <li>Identify missing or conflicting underwriting information.</li>
+            <li>Review the facts.</li>
+            <li>Generate a submission-ready package.</li>
+          </ol>
+          <p className="promise-caption">
+            A reviewed package is prepared for manual broker submission. It does not
+            guarantee carrier acceptance or replace carrier-required applications.
+          </p>
+        </div>
+        <div className="promise-demo">
+          <Demo />
+          <span className="annotation">
+            From scattered sources to a recorded decision.
+          </span>
+        </div>
       </section>
       <section className="workflow-section">
         <div>
@@ -125,6 +144,6 @@ export default function Home() {
           Request a demo →
         </Link>
       </section>
-    </>
+    </div>
   );
 }

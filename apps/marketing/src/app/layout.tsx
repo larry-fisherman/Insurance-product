@@ -1,7 +1,21 @@
 import type { Metadata } from "next";
+import { DM_Sans, Nunito } from "next/font/google";
 import Link from "next/link";
 import { appOrigin, marketingOrigin } from "../lib/config";
+import "../../../../packages/web-config/tokens.css";
 import "./globals.css";
+
+const display = Nunito({
+  subsets: ["latin"],
+  style: ["normal", "italic"],
+  variable: "--font-display",
+  fallback: ["Arial", "Helvetica", "sans-serif"],
+});
+const sans = DM_Sans({
+  subsets: ["latin"],
+  variable: "--font-sans",
+  fallback: ["Arial", "Helvetica", "sans-serif"],
+});
 
 export const metadata: Metadata = {
   metadataBase: new URL(marketingOrigin),
@@ -15,7 +29,7 @@ export const metadata: Metadata = {
 };
 export default function Layout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" className={`${display.variable} ${sans.variable}`}>
       <body>
         <a className="skip" href="#content">
           Skip to content
