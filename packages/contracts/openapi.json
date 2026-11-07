@@ -418,6 +418,11 @@
             "title": "Document Type",
             "type": "string"
           },
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
           "reason": {
             "maxLength": 2000,
             "minLength": 5,
@@ -427,6 +432,7 @@
         },
         "required": [
           "reason",
+          "expected_version",
           "document_type"
         ],
         "title": "ClassificationInput",
@@ -898,6 +904,18 @@
       },
       "ExceptionResponse": {
         "properties": {
+          "accepted_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted At"
+          },
           "accepted_by": {
             "anyOf": [
               {
@@ -947,6 +965,28 @@
           "reason"
         ],
         "title": "ExceptionResponse",
+        "type": "object"
+      },
+      "ExclusionInput": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 5,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "expected_version"
+        ],
+        "title": "ExclusionInput",
         "type": "object"
       },
       "GroupResponse": {
@@ -2223,22 +2263,6 @@
           "status"
         ],
         "title": "ReadinessResponse",
-        "type": "object"
-      },
-      "ReasonInput": {
-        "additionalProperties": false,
-        "properties": {
-          "reason": {
-            "maxLength": 2000,
-            "minLength": 5,
-            "title": "Reason",
-            "type": "string"
-          }
-        },
-        "required": [
-          "reason"
-        ],
-        "title": "ReasonInput",
         "type": "object"
       },
       "RecoveryInput": {
@@ -4327,7 +4351,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ReasonInput"
+                "$ref": "#/components/schemas/ExclusionInput"
               }
             }
           },

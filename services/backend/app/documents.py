@@ -12,6 +12,7 @@ import tempfile
 import zipfile
 from dataclasses import dataclass
 from dataclasses import field as dc_field
+from decimal import InvalidOperation
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
@@ -799,12 +800,23 @@ def supports_fact(
     Unrecognized prose remains unsupported. This bounded validator does not claim general
     semantic understanding of arbitrary insurance forms.
     """
+    return supported_by(local_extract(blocks, classify(blocks)), field, value, context, source_ids)
+
+
+def supported_by(
+    candidates: list[Extracted],
+    field: str,
+    value: Any,
+    context: dict[str, Any],
+    source_ids: list[UUID],
+) -> bool:
+    """``supports_fact`` against precomputed local candidates for the same blocks."""
     refs = set(source_ids)
     try:
         normalized_value, normalized_context = validate_fact(field, value, context)
     except (ValueError, TypeError):
         return False
-    for candidate in local_extract(blocks, classify(blocks)):
+    for candidate in candidates:
         if (
             candidate.availability == "available"
             and candidate.field == field
@@ -901,6 +913,26 @@ class ProviderOutput(BaseModel):
     facts: list[ProviderFact] = Field(max_length=500)
 
 
+AMOUNT_TOKEN = re.compile(r"\$?\d[\d,]*(?:\.\d+)?")
+
+
+def matching_amount(numbers: list[str], value: str) -> bool:
+    """True when a numeric token in the evidence normalizes to ``value``.
+
+    Provider output and evidence are untrusted: a token that is not a valid amount is skipped,
+    never allowed to raise outside the provider error contract.
+    """
+    for number in numbers:
+        if not any(character.isdigit() for character in number):
+            continue
+        try:
+            if normalize_money(number) == value:
+                return True
+        except (ValueError, InvalidOperation):
+            continue
+    return False
+
+
 def provider_extract(blocks: list[Block], configuration: Settings) -> list[Extracted]:
     if configuration.extraction_provider == "local":
         return []
@@ -985,6 +1017,7 @@ def provider_extract(blocks: list[Block], configuration: Settings) -> list[Extra
     except Exception:
         raise DocumentError("PROVIDER_EXTRACTION_FAILED", retryable=True) from None
     result = []
+    candidates: list[Extracted] | None = None  # Local extraction, computed once per call.
     for fact in output.facts:
         if any(str(ref) not in lookup for ref in fact.source_ids):
             raise DocumentError("UNSUPPORTED_PROVIDER_CITATION")
@@ -997,11 +1030,14 @@ def provider_extract(blocks: list[Block], configuration: Settings) -> list[Extra
             )
         except (ValueError, TypeError):
             raise DocumentError("INVALID_PROVIDER_FACT") from None
-        if isinstance(value, str) and value not in supporting and fact.field != "loss.period":
-            # Numeric formatting may differ, but context/semantic labels still require review.
-            numbers = re.findall(r"\$?[\d,]+(?:\.\d+)?", supporting)
-            if not any(normalize_money(n) == value for n in numbers):
-                raise DocumentError("UNSUPPORTED_PROVIDER_VALUE")
+        # Numeric formatting may differ, but context/semantic labels still require review.
+        if (
+            isinstance(value, str)
+            and value not in supporting
+            and fact.field != "loss.period"
+            and not matching_amount(AMOUNT_TOKEN.findall(supporting), value)
+        ):
+            raise DocumentError("UNSUPPORTED_PROVIDER_VALUE")
         if isinstance(value, dict) and fact.field == "loss.claim":
             for name in (
                 "claim_id",
@@ -1017,19 +1053,23 @@ def provider_extract(blocks: list[Block], configuration: Settings) -> list[Extra
                     continue
                 if str(value[name]) not in supporting:
                     raise DocumentError("UNSUPPORTED_PROVIDER_VALUE")
-            numbers = re.findall(r"(?<![A-Za-z])\$?[\d,]+(?:\.\d+)?", supporting)
+            numbers = re.findall(r"(?<![A-Za-z])\$?\d[\d,]*(?:\.\d+)?", supporting)
             for name in ("paid", "reserves", "incurred"):
-                if value.get(name) is not None and not any(
-                    normalize_money(n) == normalize_money(value[name]) for n in numbers
-                ):
+                if value.get(name) is None:
+                    continue
+                try:
+                    amount = normalize_money(value[name])
+                except (ValueError, InvalidOperation):
+                    raise DocumentError("UNSUPPORTED_PROVIDER_VALUE") from None
+                if not matching_amount(numbers, amount):
                     raise DocumentError("UNSUPPORTED_PROVIDER_VALUE")
         for name in ("period_start", "period_end", "as_of", "currency"):
-            if (
-                context.get(name)
-                and str(context[name]) not in supporting
-                and not (name == "currency" and context[name] == "USD" and "$" in supporting)
-            ):
+            # Currency must appear literally; a bare "$" does not establish USD.
+            if context.get(name) and str(context[name]) not in supporting:
                 raise DocumentError("UNSUPPORTED_PROVIDER_CONTEXT")
+        if candidates is None:
+            candidates = local_extract(blocks, classify(blocks))
+        supported = supported_by(candidates, fact.field, value, context, fact.source_ids)
         result.append(
             Extracted(
                 fact.field,
@@ -1041,14 +1081,12 @@ def provider_extract(blocks: list[Block], configuration: Settings) -> list[Extra
                 warnings=["Provider interpretation requires broker verification"]
                 + (
                     []
-                    if supports_fact(blocks, fact.field, value, context, fact.source_ids)
+                    if supported
                     else [
                         "Unsupported field or context association; supply evidence or an attributed attestation"
                     ]
                 ),
-                support_status="supported"
-                if supports_fact(blocks, fact.field, value, context, fact.source_ids)
-                else "unsupported",
+                support_status="supported" if supported else "unsupported",
             )
         )
     return result

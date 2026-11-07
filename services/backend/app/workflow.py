@@ -488,16 +488,21 @@ def readiness(session: Session, submission: Submission) -> dict[str, Any]:
     if any(f["field"] == "loss.no_losses" for f in facts) and any(
         f["field"] == "loss.claim" for f in facts
     ):
+        contradictions: set[str] = set()
         for no_loss in (f for f in facts if f["field"] == "loss.no_losses"):
             for claim in (f for f in facts if f["field"] == "loss.claim"):
                 loss_date = claim["value"].get("loss_date")
+                key = f"loss:contradiction:{no_loss['group_key']}:{claim['group_key']}"
+                if key in contradictions:
+                    continue
                 if not loss_date or no_loss["context"].get(
                     "period_start", ""
                 ) <= loss_date <= no_loss["context"].get("period_end", "9999"):
+                    contradictions.add(key)
                     blockers.append(
                         {
-                            "key": "loss:contradiction",
-                            "message": "A no-loss statement overlaps a claim or cannot be reconciled with its missing loss date.",
+                            "key": key,
+                            "message": f"A no-loss statement ({canonical_json(no_loss['context'])}) overlaps claim {claim['value'].get('claim_id')} or cannot be reconciled with its missing loss date.",
                             "waivable": False,
                         }
                     )
@@ -638,8 +643,9 @@ def readiness(session: Session, submission: Submission) -> dict[str, Any]:
             ).days > int(submission.requirements.get("loss_freshness_days", 60)):
                 missing.append(
                     (
-                        "missing:stale_losses",
-                        "A loss report valuation exceeds the configured freshness requirement.",
+                        "missing:stale_losses:" + digest(canonical_json(context)),
+                        "A loss report valuation exceeds the configured freshness requirement: "
+                        + canonical_json(context),
                     )
                 )
     else:
@@ -696,8 +702,11 @@ def readiness(session: Session, submission: Submission) -> dict[str, Any]:
         ):
             missing.append(
                 (
-                    "missing:class_namespace",
-                    "A supplied classification code has no verified carrier or rating-system namespace. It must not be treated as interchangeable.",
+                    "missing:class_namespace:" + fact["group_key"],
+                    "Classification code "
+                    + canonical_json(fact["value"])
+                    + " has no verified carrier or rating-system namespace. It must not be treated as interchangeable. Context: "
+                    + canonical_json(fact["context"]),
                 )
             )
         if fact["field"] == "exposure.amount" and fact["context"].get("role") == "unspecified":
@@ -730,8 +739,8 @@ def readiness(session: Session, submission: Submission) -> dict[str, Any]:
             if date.fromisoformat(value["valuation"]) > date.today():
                 missing.append(
                     (
-                        "missing:future_valuation",
-                        "A claim valuation is future-dated. Confirm the report date.",
+                        "missing:future_valuation:" + fact["group_key"],
+                        f"Claim {value['claim_id']} valuation {value['valuation']} is future-dated. Confirm the report date.",
                     )
                 )
     resolutions = {
@@ -768,6 +777,11 @@ def readiness(session: Session, submission: Submission) -> dict[str, Any]:
                     "message": message,
                     "reason": resolution.resolution_reason if resolution else None,
                     "accepted_by": str(resolution.resolved_by) if resolution else None,
+                    "accepted_at": (
+                        resolution.accepted_at.isoformat()
+                        if resolution and resolution.accepted_at
+                        else None
+                    ),
                     "input_fingerprint": missing_hash,
                 }
             )

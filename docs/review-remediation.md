@@ -38,6 +38,12 @@ Apply migrations through `0006_workspace` using the normal local startup/migrati
 
 Migrations were exercised only on disposable PostgreSQL databases. The developer's persisted database and private configuration were preserved.
 
+### Specific, attributable exception disclosure — existing workspaces (November 6, 2026)
+
+Requirement profile `cgl-synthetic-3` keys previously singleton missing-information items per fact: `missing:class_namespace:<group key>`, `missing:future_valuation:<group key>` and `missing:stale_losses:<context digest>`. Each message names the code, claim or context it concerns. No-loss contradictions are reported once per pair as `loss:contradiction:<no-loss group>:<claim group>` (still non-waivable). `missing:loss_period` stays a single item because it describes the one broker-requested history period. Package template `original-cgl-3` renders, for every accepted exception in the PDF and the XLSX `Exceptions` sheet, the accepting approver (display name resolved at render time from the snapshot's `accepted_by`, falling back to the recorded user ID) and the acceptance time.
+
+Migration `0013_exception_accepted_at` adds a nullable `discrepancy.accepted_at`, set when an exception is accepted. Existing rows keep `NULL`; no acceptance time is inferred. Because the requirement profile is part of the missing-information fingerprint, **every exception accepted under `cgl-synthetic-2` becomes a blocker again** in existing workspaces, by design. An authorized approver must re-accept the now-specific items before a new package can be generated. Historical revisions, packages (template `original-cgl-2`), approvals and artifacts are not rewritten; their stored bytes still verify against their manifests, and a re-render of an old snapshot shows "not recorded" where no acceptance time exists.
+
 ## Remaining scope and release blockers
 
 These are **open engineering requirements or external acceptance work**, not completed work and not merely documentation deferrals.

@@ -89,9 +89,10 @@ VIEWER_BODIES: dict[tuple[str, str], Any] = {
         "status": "cancelled",
     },
     ("POST", "/api/v1/submissions/{submission_id}/documents"): "multipart",
-    ("POST", "/api/v1/documents/{document_id}/exclude"): {"reason": REASON},
+    ("POST", "/api/v1/documents/{document_id}/exclude"): {"reason": REASON, "expected_version": 1},
     ("POST", "/api/v1/documents/{document_id}/classification"): {
         "reason": REASON,
+        "expected_version": 1,
         "document_type": "unknown",
     },
     ("POST", "/api/v1/jobs/{job_id}/retry"): None,

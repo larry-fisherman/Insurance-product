@@ -168,6 +168,7 @@ class ExceptionResponse(BaseModel):
     message: str
     reason: str | None
     accepted_by: UUID | None = None
+    accepted_at: datetime | None = None
     input_fingerprint: str | None = None
 
 

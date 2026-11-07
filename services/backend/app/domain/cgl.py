@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 PIPELINE_VERSION = "cgl-extraction-2"
 SCHEMA_VERSION = "cgl-2"
 RULE_VERSION = "cgl-rules-2"
-REQUIREMENT_PROFILE = "cgl-synthetic-2"
+REQUIREMENT_PROFILE = "cgl-synthetic-3"
 PROMPT_VERSION = "cgl-evidence-2"
 # Lines whose schema, rules and requirements are implemented. Anything else fails closed;
 # it is never silently routed to CGL rules. This is a guard, not a line registry.

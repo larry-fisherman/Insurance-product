@@ -142,6 +142,7 @@ function Documents({
                         action={async (f) => {
                           await send("/documents/" + doc.id + "/exclude", {
                             reason: formText(f, "reason"),
+                            expected_version: data.submission.row_version,
                           });
                           await refresh();
                         }}
@@ -164,6 +165,7 @@ function Documents({
                             await send("/documents/" + doc.id + "/classification", {
                               document_type: formText(form, "document_type"),
                               reason: formText(form, "reason"),
+                              expected_version: data.submission.row_version,
                             });
                             await refresh();
                           }}

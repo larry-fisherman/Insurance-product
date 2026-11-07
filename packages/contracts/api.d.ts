@@ -1219,6 +1219,8 @@ export interface components {
              * @enum {string}
              */
             document_type: "application" | "policy" | "loss_runs" | "exposure_schedule" | "endorsement" | "mixed" | "unknown";
+            /** Expected Version */
+            expected_version: number;
             /** Reason */
             reason: string;
         };
@@ -1411,6 +1413,8 @@ export interface components {
         };
         /** ExceptionResponse */
         ExceptionResponse: {
+            /** Accepted At */
+            accepted_at?: string | null;
             /** Accepted By */
             accepted_by?: string | null;
             /** Input Fingerprint */
@@ -1421,6 +1425,13 @@ export interface components {
             message: string;
             /** Reason */
             reason: string | null;
+        };
+        /** ExclusionInput */
+        ExclusionInput: {
+            /** Expected Version */
+            expected_version: number;
+            /** Reason */
+            reason: string;
         };
         /** GroupResponse */
         GroupResponse: {
@@ -1892,11 +1903,6 @@ export interface components {
              * @default 0.1.0
              */
             version: string;
-        };
-        /** ReasonInput */
-        ReasonInput: {
-            /** Reason */
-            reason: string;
         };
         /** RecoveryInput */
         RecoveryInput: {
@@ -3058,7 +3064,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ReasonInput"];
+                "application/json": components["schemas"]["ExclusionInput"];
             };
         };
         responses: {

@@ -68,6 +68,26 @@ def test_line_guard_upgrade_adds_and_downgrade_removes_the_constraint(
         assert line_checks(connection) == ["ck_submission_line"]
 
 
+def test_exception_accepted_at_upgrade_adds_and_downgrade_removes_the_column(
+    database_factory: Callable[[], AbstractContextManager[Engine]],
+    migration_config: Callable[[Connection], Config],
+) -> None:
+    def columns(connection: Connection) -> set[str]:
+        return {
+            column["name"]
+            for column in sa.inspect(connection).get_columns("discrepancy", schema="app")
+        }
+
+    with database_factory() as engine, engine.connect() as connection:
+        config = migration_config(connection)
+        command.upgrade(config, "0013_exception_accepted_at")
+        assert "accepted_at" in columns(connection)
+        command.downgrade(config, "0012_line_guard")
+        assert "accepted_at" not in columns(connection)
+        command.upgrade(config, "0013_exception_accepted_at")
+        assert "accepted_at" in columns(connection)
+
+
 def test_migration_owner_and_runtime_role_are_unprivileged(connection: Connection) -> None:
     rows = (
         connection.execute(

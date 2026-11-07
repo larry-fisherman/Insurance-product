@@ -214,6 +214,8 @@ class Discrepancy(Base, TenantRecord):
     observation_ids: Mapped[list[str]] = mapped_column(JSONB)
     resolution_reason: Mapped[str | None] = mapped_column(sa.Text)
     resolved_by: Mapped[UUID | None] = mapped_column(sa.ForeignKey("app.app_user.id"))
+    # Set when an authorized approver accepts a missing-information exception (0013).
+    accepted_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     rule_version: Mapped[str] = mapped_column(sa.Text)
 
 

@@ -66,6 +66,12 @@ def post(client: TestClient, path: str, body: Any) -> Any:
     return client.post("/api/v1" + path, json=body, headers=headers)
 
 
+def row_version(client: TestClient, submission_id: str) -> int:
+    return int(
+        client.get(f"/api/v1/submissions/{submission_id}").json()["submission"]["row_version"]
+    )
+
+
 def demo(client: TestClient) -> tuple[str, dict[str, Any]]:
     response = post(client, "/auth/demo", {})
     assert response.status_code == 201, response.text
@@ -176,7 +182,10 @@ def test_end_to_end_review_approval_export_and_staleness(
         post(
             client,
             f"/documents/{doc_id}/exclude",
-            {"reason": "Replaced for a synthetic integrity test"},
+            {
+                "reason": "Replaced for a synthetic integrity test",
+                "expected_version": row_version(client, submission_id),
+            },
         ).status_code
         == 200
     )
@@ -600,11 +609,29 @@ def test_excluded_adverse_and_failed_sources_remain_in_frozen_inventory(
         post(
             client,
             f"/documents/{failed_id}/exclude",
-            {"reason": "Unreadable extra loss report; confirm limitation"},
+            {
+                "reason": "Unreadable extra loss report; confirm limitation",
+                "expected_version": row_version(client, submission_id),
+            },
         ).status_code
         == 200
     )
     current = client.get(f"/api/v1/submissions/{submission_id}").json()
+    again = post(
+        client,
+        f"/documents/{failed_id}/exclude",
+        {
+            "reason": "A second exclusion must not overwrite the first",
+            "expected_version": current["submission"]["row_version"],
+        },
+    )
+    assert again.status_code == 409, again.text
+    assert again.json()["detail"]["code"] == "ALREADY_EXCLUDED"
+    current = client.get(f"/api/v1/submissions/{submission_id}").json()
+    assert (
+        next(d for d in current["documents"] if d["id"] == failed_id)["excluded_reason"]
+        == "Unreadable extra loss report; confirm limitation"
+    )
     blocker = next(
         b for b in current["readiness"]["blockers"] if b["key"] == "missing:excluded:" + failed_id
     )
@@ -621,6 +648,22 @@ def test_excluded_adverse_and_failed_sources_remain_in_frozen_inventory(
         ).status_code
         == 200
     )
+    from app.database.models import AuditEvent
+
+    db = Database(workspace_settings)
+    with db.tenant(UUID(actor["tenant_id"]), UUID(actor["user_id"])) as session:
+        summary = session.scalars(
+            sa.select(AuditEvent.change_summary).where(
+                AuditEvent.action == "exception.accepted",
+                AuditEvent.object_id == UUID(submission_id),
+            )
+        ).one()
+    db.close()
+    assert summary == {
+        "requirement": blocker["key"],
+        "fingerprint": blocker["fingerprint"],
+        "reason": "Approver reviewed missing additional report and accepted limitation",
+    }
     current = client.get(f"/api/v1/submissions/{submission_id}").json()
     assert current["readiness"]["ready"], current["readiness"]["blockers"]
     generated = post(
@@ -1039,12 +1082,23 @@ def test_exclusion_refreshes_conflicts_without_hiding_completeness(
     data = client.get(f"/api/v1/submissions/{submission_id}").json()
     assert any(i["kind"] == "conflict" and i["status"] == "open" for i in data["issues"])
     schedule = next(d for d in data["documents"] if d["filename"] == "Sales-schedule.xlsx")
+    stale = post(
+        client,
+        f"/documents/{schedule['id']}/exclude",
+        {
+            "reason": "A stale tab must not exclude a document",
+            "expected_version": data["submission"]["row_version"] - 1,
+        },
+    )
+    assert stale.status_code == 409, stale.text
+    assert stale.json()["detail"]["code"] == "STALE_WORKSPACE"
     assert (
         post(
             client,
             f"/documents/{schedule['id']}/exclude",
             {
-                "reason": "Fictional schedule superseded; material sales difference needs disposition"
+                "reason": "Fictional schedule superseded; material sales difference needs disposition",
+                "expected_version": data["submission"]["row_version"],
             },
         ).status_code
         == 200
@@ -1533,7 +1587,12 @@ def test_input_change_supersedes_package_for_approval_and_export(
     assert approve(client, detail).status_code == 200
     document_id = client.get("/api/v1/submissions/" + submission_id).json()["documents"][0]["id"]
     excluded = post(
-        client, f"/documents/{document_id}/exclude", {"reason": "Synthetic input change"}
+        client,
+        f"/documents/{document_id}/exclude",
+        {
+            "reason": "Synthetic input change",
+            "expected_version": row_version(client, submission_id),
+        },
     )
     assert excluded.status_code == 200, excluded.text
     superseded = approve(client, detail)
@@ -1564,3 +1623,192 @@ def test_unsupported_line_is_rejected_by_database_constraint(
             )
             == "cgl"
         )
+
+
+def test_reexclusion_preserves_superseded_reason(client: TestClient) -> None:
+    from app.demo import pdf
+
+    submission_id, _ = demo(client)
+    prior = client.get(f"/api/v1/submissions/{submission_id}").json()["documents"][0]
+    uploaded = client.post(
+        f"/api/v1/submissions/{submission_id}/documents",
+        files={
+            "file": (
+                "Replacement.pdf",
+                pdf(["FICTIONAL REPLACEMENT", "Policy number: REPLACED-1"]),
+                "application/pdf",
+            )
+        },
+        data={"supersedes_id": prior["id"]},
+        headers={
+            "X-CSRF-Token": client.cookies.get("cgl_csrf", "") or "",
+            "Idempotency-Key": "reexclusion-replacement-test",
+        },
+    )
+    assert uploaded.status_code == 202, uploaded.text
+    again = post(
+        client,
+        f"/documents/{prior['id']}/exclude",
+        {
+            "reason": "Overwrite the supersession reason",
+            "expected_version": row_version(client, submission_id),
+        },
+    )
+    assert again.status_code == 409, again.text
+    assert again.json()["detail"]["code"] == "ALREADY_EXCLUDED"
+    current = client.get(f"/api/v1/submissions/{submission_id}").json()
+    old = next(d for d in current["documents"] if d["id"] == prior["id"])
+    assert old["excluded_reason"] == "Superseded by a newer document version"
+
+
+def test_classification_history_keeps_every_override(
+    client: TestClient, workspace_settings: Settings
+) -> None:
+    submission_id, actor = demo(client)
+    process_pending(workspace_settings, actor)
+    data = client.get(f"/api/v1/submissions/{submission_id}").json()
+    document = next(d for d in data["documents"] if d["processing_status"] == "completed")
+    original = document["document_type"]
+    path = f"/documents/{document['id']}/classification"
+    stale = post(
+        client,
+        path,
+        {
+            "document_type": "mixed",
+            "reason": "A stale tab must not reclassify",
+            "expected_version": data["submission"]["row_version"] - 1,
+        },
+    )
+    assert stale.status_code == 409, stale.text
+    assert stale.json()["detail"]["code"] == "STALE_WORKSPACE"
+    for kind in ("mixed", "unknown"):
+        changed = post(
+            client,
+            path,
+            {
+                "document_type": kind,
+                "reason": f"Synthetic correction to {kind}",
+                "expected_version": row_version(client, submission_id),
+            },
+        )
+        assert changed.status_code == 200, changed.text
+    inventory = changed.json()["processing_inventory"]
+    history = inventory["classification_history"]
+    assert [(h["previous_type"], h["type"]) for h in history] == [
+        (original, "mixed"),
+        ("mixed", "unknown"),
+    ]
+    assert all(h["actor"] == actor["user_id"] and h["reason"] and h["at"] for h in history)
+    assert inventory["classification_override"] == {
+        k: v for k, v in history[-1].items() if k != "previous_type"
+    }
+
+
+DEMO_APPROVER = "Alex Morgan"  # Display name of the synthetic demo user (app/demo.py).
+
+
+def test_class_codes_without_namespace_are_separate_attributable_exceptions(
+    client: TestClient, workspace_settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pypdf import PdfReader
+
+    from app.demo import pdf
+
+    submission_id, actor = reviewed_workspace(client, workspace_settings)
+    data = pdf(
+        [
+            "FICTIONAL CGL APPLICATION - SYNTHETIC ONLY",
+            "Legal insured name: Lakeshore Design Services LLC",
+            "GL class code: 91340",
+            "GL class code: 91342",
+        ]
+    )
+    uploaded = client.post(
+        f"/api/v1/submissions/{submission_id}/documents",
+        files={"file": ("Class-codes.pdf", data, "application/pdf")},
+        headers={
+            "X-CSRF-Token": client.cookies.get("cgl_csrf", "") or "",
+            "Idempotency-Key": "class-namespace-test",
+        },
+    )
+    assert uploaded.status_code == 202, uploaded.text
+    monkeypatch.setattr("app.worker.scan", lambda *args: "mock-scan-of-fictional-fixture")
+    process_pending(workspace_settings, actor)
+    current = client.get(f"/api/v1/submissions/{submission_id}").json()
+    decisions = [
+        {
+            "group_key": g["key"],
+            "fingerprint": g["fingerprint"],
+            "action": "approve",
+            "observation_id": g["observations"][0]["id"],
+            "reason": "Reviewed fictional class code against its source",
+        }
+        for g in current["readiness"]["groups"]
+        if not g["verified"]
+    ]
+    reviewed = post(
+        client,
+        f"/submissions/{submission_id}/review-decisions",
+        {"expected_version": current["submission"]["row_version"], "decisions": decisions},
+    )
+    assert reviewed.status_code == 200, reviewed.text
+    current = client.get(f"/api/v1/submissions/{submission_id}").json()
+    namespace = [
+        b
+        for b in current["readiness"]["blockers"]
+        if b["key"].startswith("missing:class_namespace")
+    ]
+    assert len(namespace) == 2 and len({b["key"] for b in namespace}) == 2
+    assert all(b["waivable"] for b in namespace)
+    assert any("91340" in b["message"] for b in namespace)
+    assert any("91342" in b["message"] for b in namespace)
+    accepted = post(
+        client,
+        f"/submissions/{submission_id}/exceptions",
+        {
+            "expected_version": current["submission"]["row_version"],
+            "key": namespace[0]["key"],
+            "fingerprint": namespace[0]["fingerprint"],
+            "reason": "Approver accepted one fictional class code without a namespace",
+        },
+    )
+    assert accepted.status_code == 200, accepted.text
+    current = client.get(f"/api/v1/submissions/{submission_id}").json()
+    # Accepting one code's limitation does not waive the other.
+    assert [b["key"] for b in current["readiness"]["blockers"]] == [namespace[1]["key"]]
+    accepted = post(
+        client,
+        f"/submissions/{submission_id}/exceptions",
+        {
+            "expected_version": current["submission"]["row_version"],
+            "key": namespace[1]["key"],
+            "fingerprint": current["readiness"]["blockers"][0]["fingerprint"],
+            "reason": "Approver accepted the second fictional class code without a namespace",
+        },
+    )
+    assert accepted.status_code == 200, accepted.text
+    current = client.get(f"/api/v1/submissions/{submission_id}").json()
+    assert current["readiness"]["ready"], current["readiness"]["blockers"]
+    exceptions = current["readiness"]["exceptions"]
+    assert all(e["accepted_by"] == actor["user_id"] and e["accepted_at"] for e in exceptions)
+    generated = post(
+        client,
+        f"/submissions/{submission_id}/packages",
+        {"expected_version": current["submission"]["row_version"]},
+    )
+    assert generated.status_code == 202, generated.text
+    process_pending(workspace_settings, actor)
+    package_id = generated.json()["id"]
+    rendered = client.get(f"/api/v1/packages/{package_id}/artifacts/pdf?preview=true")
+    assert rendered.status_code == 200, rendered.text
+    text = "".join(page.extract_text() for page in PdfReader(io.BytesIO(rendered.content)).pages)
+    assert text.count("Accepted by: " + DEMO_APPROVER) == 2
+    sheet = client.get(f"/api/v1/packages/{package_id}/artifacts/xlsx?preview=true")
+    assert sheet.status_code == 200, sheet.text
+    workbook = openpyxl.load_workbook(io.BytesIO(sheet.content))
+    rows = list(workbook["Exceptions"].iter_rows(values_only=True))
+    workbook.close()
+    assert rows[0] == ("Requirement", "Message", "Reason", "Accepted by", "Accepted at")
+    namespace_rows = [r for r in rows[1:] if str(r[0]).startswith("missing:class_namespace")]
+    assert len(namespace_rows) == 2
+    assert all(r[3] == DEMO_APPROVER and r[4] for r in namespace_rows)

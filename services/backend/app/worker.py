@@ -465,7 +465,23 @@ def process_job(configuration: Settings, tenant_id: UUID, user_id: UUID, job_id:
                 ]
                 if len(evidence) != len(source_ids):
                     raise DocumentError("EVIDENCE_NOT_FOUND")
-            outputs, manifest = render(snapshot, revision_hash, documents, supporting, evidence)
+                # Exception approvers are disclosed by display name, resolved at render time.
+                approver_ids = {
+                    UUID(item["accepted_by"])
+                    for item in snapshot.get("exceptions", [])
+                    if item.get("accepted_by")
+                }
+                actor_names = {
+                    str(user_id): name
+                    for user_id, name in session.execute(
+                        sa.select(AppUser.id, AppUser.display_name).where(
+                            AppUser.id.in_(approver_ids)
+                        )
+                    )
+                }
+            outputs, manifest = render(
+                snapshot, revision_hash, documents, supporting, evidence, actor_names
+            )
             artifacts, reservations = [], []
             for format, (data, filename, media_type) in outputs.items():
                 # One reservation per attempt and format: a lease-lost attempt leaves a

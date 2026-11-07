@@ -152,7 +152,12 @@ class ExceptionInput(ReasonInput):
     expected_version: int
 
 
+class ExclusionInput(ReasonInput):
+    expected_version: int = Field(ge=1)
+
+
 class ClassificationInput(ReasonInput):
+    expected_version: int = Field(ge=1)
     document_type: Literal[
         "application", "policy", "loss_runs", "exposure_schedule", "endorsement", "mixed", "unknown"
     ]
@@ -716,11 +721,15 @@ def upload(
 
 
 @router.post("/documents/{document_id}/exclude")
-def exclude_document(document_id: UUID, payload: ReasonInput, scope: Scoped) -> dict[str, bool]:
+def exclude_document(document_id: UUID, payload: ExclusionInput, scope: Scoped) -> dict[str, bool]:
     scope.require("documents.write")
     doc = get(scope.session, DocumentVersion, document_id)
     submission = get(scope.session, Submission, doc.submission_id, lock=True)
     ensure_open(submission)
+    version_check(submission, payload.expected_version)
+    if doc.excluded_reason:
+        # The first exclusion (including a supersession) stays the attributable record.
+        fail(409, "ALREADY_EXCLUDED", "This document is already excluded from the package.")
     doc.excluded_reason = payload.reason
     doc.excluded_by, doc.excluded_at = scope.actor.user_id, now()
     submission.input_version += 1
@@ -774,17 +783,24 @@ def classify_document(
     doc = get(scope.session, DocumentVersion, document_id)
     submission = get(scope.session, Submission, doc.submission_id, lock=True)
     ensure_open(submission)
+    version_check(submission, payload.expected_version)
     if doc.processing_status != "completed":
         fail(409, "DOCUMENT_NOT_READY", "Wait for processing before overriding classification.")
+    changed_at = now().isoformat()
+    override = {
+        "type": payload.document_type,
+        "reason": payload.reason,
+        "actor": str(scope.actor.user_id),
+        "at": changed_at,
+    }
+    history = list(doc.processing_inventory.get("classification_history") or [])
+    history.append({"previous_type": doc.document_type, **override})
     doc.document_type = payload.document_type
     doc.processing_inventory = {
         **doc.processing_inventory,
-        "classification_override": {
-            "type": payload.document_type,
-            "reason": payload.reason,
-            "actor": str(scope.actor.user_id),
-            "at": now().isoformat(),
-        },
+        # Append-only history; ``classification_override`` stays the latest entry for readers.
+        "classification_history": history,
+        "classification_override": override,
     }
     submission.input_version += 1
     submission.row_version += 1
@@ -900,10 +916,12 @@ def accept_exception(submission_id: UUID, payload: ExceptionInput, scope: Scoped
             input_fingerprint=payload.fingerprint,
         )
         scope.session.add(row)
-    row.status, row.resolution_reason, row.resolved_by = (
+    previous_resolved_by = row.resolved_by
+    row.status, row.resolution_reason, row.resolved_by, row.accepted_at = (
         "accepted",
         payload.reason,
         scope.actor.user_id,
+        now(),
     )
     row.input_fingerprint = payload.fingerprint
     row.rule_version = REQUIREMENT_PROFILE
@@ -917,7 +935,16 @@ def accept_exception(submission_id: UUID, payload: ExceptionInput, scope: Scoped
         "exception.accepted",
         "submission",
         submission.id,
-        {"requirement": payload.key},
+        {
+            "requirement": payload.key,
+            "fingerprint": payload.fingerprint,
+            "reason": payload.reason,
+            **(
+                {"previous_resolved_by": str(previous_resolved_by)}
+                if previous_resolved_by is not None
+                else {}
+            ),
+        },
     )
     return {"revision": record(revision), "row_version": submission.row_version}
 

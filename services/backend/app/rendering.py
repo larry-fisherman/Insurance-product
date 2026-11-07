@@ -15,7 +15,7 @@ from reportlab.platypus import LongTable, Paragraph, SimpleDocTemplate, Spacer, 
 from app.common import canonical_json, digest
 from app.domain.cgl import FIELD_LABELS
 
-TEMPLATE_VERSION = "original-cgl-2"
+TEMPLATE_VERSION = "original-cgl-3"
 
 
 def text(value: Any) -> str:
@@ -25,6 +25,14 @@ def text(value: Any) -> str:
 def safe_cell(value: Any) -> str:
     rendered = text(value)
     return "'" + rendered if rendered.startswith(("=", "+", "-", "@", "\t", "\r")) else rendered
+
+
+def accepted_by_text(item: dict[str, Any], actor_names: dict[str, str]) -> str:
+    """Approver display name resolved at render time; the recorded ID when no name resolves."""
+    actor = item.get("accepted_by")
+    if not actor:
+        return "not recorded"
+    return actor_names.get(str(actor)) or str(actor)
 
 
 def context_text(context: dict[str, Any]) -> str:
@@ -41,7 +49,9 @@ def render(
     documents: list[dict[str, Any]],
     supporting: list[tuple[str, bytes]],
     evidence: list[dict[str, Any]] | None = None,
+    actor_names: dict[str, str] | None = None,
 ) -> tuple[dict[str, tuple[bytes, str, str]], dict[str, Any]]:
+    actor_names = actor_names or {}
     buffer = io.BytesIO()
     styles = getSampleStyleSheet()
     styles["Title"].textColor = colors.HexColor("#18332e")
@@ -150,7 +160,16 @@ def render(
     )
     paragraph("Exceptions and omissions", "Heading2")
     for item in snapshot["exceptions"]:
-        paragraph(item["message"] + " Reason: " + str(item.get("reason", "")))
+        paragraph(
+            item["message"]
+            + " Reason: "
+            + str(item.get("reason", ""))
+            + " Accepted by: "
+            + accepted_by_text(item, actor_names)
+            + ". Accepted at: "
+            + (item.get("accepted_at") or "not recorded")
+            + "."
+        )
     for item in snapshot["omissions"]:
         paragraph("Omitted review group " + item["group_key"] + ": " + item["reason"])
     for item in snapshot.get("rejections", []):
@@ -315,7 +334,7 @@ def render(
         for column in schedule.columns:
             schedule.column_dimensions[column[0].column_letter].width = 26
     notes = workbook.create_sheet("Exceptions")
-    notes.append(["Requirement", "Message", "Reason"])
+    notes.append(["Requirement", "Message", "Reason", "Accepted by", "Accepted at"])
     for item in snapshot["exceptions"]:
         message = str(item["message"])
         for start in range(0, max(1, len(message)), 30000):
@@ -324,6 +343,8 @@ def render(
                     safe_cell(item["key"]),
                     safe_cell(message[start : start + 30000]),
                     safe_cell(item.get("reason", "")),
+                    safe_cell(accepted_by_text(item, actor_names)),
+                    safe_cell(item.get("accepted_at") or "not recorded"),
                 ]
             )
     for item in snapshot["omissions"]:

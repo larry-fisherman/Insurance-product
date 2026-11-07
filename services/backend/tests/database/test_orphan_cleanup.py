@@ -249,7 +249,12 @@ def test_retained_documents_and_artifacts_are_never_candidates(
         post(
             client,
             f"/documents/{documents[1].id}/exclude",
-            {"reason": "Synthetic test: exclude a fictional source."},
+            {
+                "reason": "Synthetic test: exclude a fictional source.",
+                "expected_version": client.get(f"/api/v1/submissions/{submission}").json()[
+                    "submission"
+                ]["row_version"],
+            },
         ).status_code
         == 200
     )

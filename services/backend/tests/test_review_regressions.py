@@ -414,3 +414,88 @@ def test_unsupported_line_fails_closed_on_api_and_worker_paths() -> None:
         require_supported_line(unsupported, error=DocumentError)
     assert worker_error.value.code == "UNSUPPORTED_LINE"
     assert not worker_error.value.retryable
+
+
+def exception_snapshot(exceptions: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "intended_start": "2027-01-01",
+        "intended_end": "2028-01-01",
+        "facts": [],
+        "exceptions": exceptions,
+        "omissions": [],
+    }
+
+
+def test_exception_disclosure_names_approver_and_time_in_pdf_and_xlsx() -> None:
+    import openpyxl
+
+    from app.common import canonical_json, digest
+    from app.rendering import TEMPLATE_VERSION, render
+
+    named, unnamed = str(uuid4()), str(uuid4())
+    snapshot = exception_snapshot(
+        [
+            {
+                "key": "missing:class_namespace:a",
+                "message": "Classification code 91340 has no namespace.",
+                "reason": "Accepted fictional limitation",
+                "accepted_by": named,
+                "accepted_at": "2026-11-06T12:00:00+00:00",
+            },
+            {
+                "key": "missing:class_namespace:b",
+                "message": "Classification code 91342 has no namespace.",
+                "reason": "Accepted fictional limitation",
+                "accepted_by": unnamed,
+                "accepted_at": "2026-11-06T12:05:00+00:00",
+            },
+        ]
+    )
+    result, manifest = render(
+        snapshot, digest(canonical_json(snapshot)), [], [], [], {named: "Fictional Approver"}
+    )
+    assert TEMPLATE_VERSION == "original-cgl-3" == manifest["template_version"]
+    text = "".join(page.extract_text() for page in PdfReader(io.BytesIO(result["pdf"][0])).pages)
+    text = " ".join(text.split())
+    assert "Accepted by: Fictional Approver. Accepted at: 2026-11-06T12:00:00+00:00" in text
+    # A name that does not resolve falls back to the recorded user ID.
+    assert "Accepted by: " + unnamed in text
+    workbook = openpyxl.load_workbook(io.BytesIO(result["xlsx"][0]))
+    rows = list(workbook["Exceptions"].iter_rows(values_only=True))
+    workbook.close()
+    assert rows[0] == ("Requirement", "Message", "Reason", "Accepted by", "Accepted at")
+    assert rows[1][3:] == ("Fictional Approver", "2026-11-06T12:00:00+00:00")
+    assert rows[2][3:] == (unnamed, "2026-11-06T12:05:00+00:00")
+
+
+def test_pre_disclosure_snapshot_still_renders_and_verifies() -> None:
+    import json
+    import zipfile
+
+    from app.common import canonical_json, digest
+    from app.rendering import render
+
+    # A snapshot frozen before acceptance times were recorded (cgl-synthetic-2 era).
+    snapshot = exception_snapshot(
+        [
+            {
+                "key": "missing:class_namespace",
+                "message": "A supplied classification code has no verified namespace.",
+                "reason": "Accepted limitation",
+                "accepted_by": str(uuid4()),
+                "input_fingerprint": "f" * 64,
+            },
+            {"key": "missing:loss_runs", "message": "Loss runs missing.", "reason": "Accepted"},
+        ]
+    )
+    revision_hash = digest(canonical_json(snapshot))
+    result, manifest = render(snapshot, revision_hash, [], [])
+    text = "".join(page.extract_text() for page in PdfReader(io.BytesIO(result["pdf"][0])).pages)
+    text = " ".join(text.split())
+    assert "Accepted at: not recorded" in text and "Accepted by: not recorded" in text
+    with zipfile.ZipFile(io.BytesIO(result["zip"][0])) as archive:
+        stored = archive.read("reviewed-snapshot.json")
+        assert digest(stored) == revision_hash == manifest["revision_hash"]
+        assert json.loads(stored) == snapshot
+        for file in json.loads(archive.read("manifest.json"))["files"]:
+            assert digest(archive.read(file["filename"])) == file["sha256"]

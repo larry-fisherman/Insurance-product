@@ -168,3 +168,71 @@ def test_provider_paid_reserve_swap_cannot_pass_numeric_presence(
         ),
     )
     assert provider_extract(blocks, configuration())[0].support_status == "unsupported"
+
+
+def claim_fact(blocks: list[Block], paid: str) -> dict[str, Any]:
+    from app.domain.cgl import Claim
+
+    claim = Claim.model_validate(
+        {
+            "claim_id": "C1",
+            "carrier": "Demo",
+            "policy": "P1",
+            "paid": paid,
+            "reserves": "0",
+            "incurred": paid,
+            "valuation": "2026-10-29",
+        }
+    )
+    return {
+        "field": "loss.claim",
+        "value_json": claim.model_dump_json(),
+        "context": Context(currency="USD").model_dump(mode="json"),
+        "source_ids": [str(b.id) for b in blocks],
+    }
+
+
+@pytest.mark.parametrize("kind", ["text", "claim"])
+def test_provider_comma_only_tokens_fail_inside_the_error_contract(
+    monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    # A bare "," once matched the amount pattern and raised ValueError outside validation.
+    if kind == "text":
+        blocks = [Block("Legal insured name: Fictional, Company, LLC", {"kind": "pdf", "page": 1})]
+        fact = {
+            "field": "insured.legal_name",
+            "value_json": json.dumps("Invented Company LLC"),
+            "context": Context().model_dump(mode="json"),
+            "source_ids": [str(blocks[0].id)],
+        }
+    else:
+        blocks = [
+            Block("Currency: USD", {"kind": "pdf", "page": 1}),
+            Block(
+                "Claim: C1, carrier=Demo, policy=P1, paid=0, reserves=0, valuation=2026-10-29",
+                {"kind": "pdf", "page": 1},
+            ),
+        ]
+        fact = claim_fact(blocks, "100")
+    install_response(monkeypatch, response([fact]))
+    with pytest.raises(DocumentError, match="UNSUPPORTED_PROVIDER_VALUE"):
+        provider_extract(blocks, configuration())
+
+
+def test_provider_dollar_sign_does_not_establish_usd(monkeypatch: pytest.MonkeyPatch) -> None:
+    block = Block("General aggregate limit: $2,000,000", {"kind": "pdf", "page": 1})
+    install_response(
+        monkeypatch,
+        response(
+            [
+                {
+                    "field": "coverage.general_aggregate",
+                    "value_json": json.dumps("2000000"),
+                    "context": Context(role="existing", currency="USD").model_dump(mode="json"),
+                    "source_ids": [str(block.id)],
+                }
+            ]
+        ),
+    )
+    with pytest.raises(DocumentError, match="UNSUPPORTED_PROVIDER_CONTEXT"):
+        provider_extract([block], configuration())

@@ -606,7 +606,12 @@ def test_excluded_failed_and_quarantined_documents_stay_charged(
     excluded = post(
         client,
         f"/documents/{documents[0].id}/exclude",
-        {"reason": "Synthetic test: exclude a fictional source from review."},
+        {
+            "reason": "Synthetic test: exclude a fictional source from review.",
+            "expected_version": client.get(f"/api/v1/submissions/{submission}").json()[
+                "submission"
+            ]["row_version"],
+        },
     )
     assert excluded.status_code == 200, excluded.text
     with database_engine.begin() as connection:
