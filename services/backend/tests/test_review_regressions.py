@@ -5,11 +5,13 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
 from pypdf import PdfReader, PdfWriter
 
 from app.demo import pdf
 from app.documents import Block, DocumentError, local_extract, parse_pdf, supports_fact
-from app.domain.cgl import group_key, validate_fact
+from app.domain.cgl import group_key, require_supported_line, validate_fact
+from app.domain.models import Submission
 from app.workflow import approved_facts
 
 
@@ -397,3 +399,18 @@ def test_compatible_monetary_unit_spellings_share_one_canonical_context() -> Non
     assert group_key("exposure.amount", context) == group_key(
         "exposure.amount", {**context, "unit": "money"}
     )
+
+
+def test_unsupported_line_fails_closed_on_api_and_worker_paths() -> None:
+    require_supported_line(Submission(line="cgl"))
+    require_supported_line(Submission(line="cgl"), error=DocumentError)
+    unsupported = Submission(line="property")
+    with pytest.raises(HTTPException) as api_error:
+        require_supported_line(unsupported)
+    assert api_error.value.status_code == 409
+    detail: Any = api_error.value.detail
+    assert detail["code"] == "UNSUPPORTED_LINE"
+    with pytest.raises(DocumentError) as worker_error:
+        require_supported_line(unsupported, error=DocumentError)
+    assert worker_error.value.code == "UNSUPPORTED_LINE"
+    assert not worker_error.value.retryable

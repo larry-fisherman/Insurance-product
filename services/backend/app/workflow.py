@@ -20,6 +20,7 @@ from app.domain.cgl import (
     fingerprint,
     group_key,
     reconcile,
+    require_supported_line,
     validate_fact,
 )
 from app.domain.models import (
@@ -363,6 +364,7 @@ def approved_facts(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def readiness(session: Session, submission: Submission) -> dict[str, Any]:
+    require_supported_line(submission)
     groups = observation_groups(session, submission.id)
     facts = approved_facts(groups)
     blockers: list[dict[str, Any]] = []
@@ -788,6 +790,7 @@ def readiness(session: Session, submission: Submission) -> dict[str, Any]:
 
 
 def save_revision(scope: Scope, submission: Submission) -> CanonicalRevision:
+    require_supported_line(submission)
     state = readiness(scope.session, submission)
     snapshot = {
         "schema_version": SCHEMA_VERSION,
@@ -887,6 +890,7 @@ def verify_approval_authority(scope: Scope) -> None:
 def review(
     scope: Scope, submission: Submission, decisions: list[dict[str, Any]]
 ) -> CanonicalRevision:
+    require_supported_line(submission)
     scope.require("reviews.write")
     ensure_open(submission)
     groups = {g["key"]: g for g in observation_groups(scope.session, submission.id)}

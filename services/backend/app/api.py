@@ -32,7 +32,7 @@ from app.database.models import (
     Tenant,
 )
 from app.documents import MAX_FILE, DocumentError, fixture_signature, validate_file
-from app.domain.cgl import FIELD_LABELS, REQUIREMENT_PROFILE
+from app.domain.cgl import FIELD_LABELS, REQUIREMENT_PROFILE, require_supported_line
 from app.domain.models import (
     Approval,
     CanonicalRevision,
@@ -934,6 +934,7 @@ def generate_package(
     scope.require("packages.generate")
     require_capacity(scope)
     submission = get(scope.session, Submission, submission_id, lock=True)
+    require_supported_line(submission)
     ensure_open(submission)
     object_id, exists = idempotent(
         scope,
@@ -1005,6 +1006,7 @@ def approve_package(package_id: UUID, payload: ApprovalInput, scope: Scoped) -> 
     require_recent(scope.actor)
     package = get(scope.session, Package, package_id)
     submission = get(scope.session, Submission, package.submission_id, lock=True)
+    require_supported_line(submission)
     ensure_open(submission)
     verify_approval_authority(scope)
     revision = get(scope.session, CanonicalRevision, package.revision_id)

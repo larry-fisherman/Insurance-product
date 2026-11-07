@@ -83,6 +83,7 @@ class Submission(Base, TenantRecord):
         ),
         sa.CheckConstraint("intended_end > intended_start", name="valid_dates"),
         sa.CheckConstraint("kind IN ('new_business','renewal')", name="kind"),
+        sa.CheckConstraint("line IN ('cgl')", name="line"),
         sa.Index("ix_submission_tenant_due", "tenant_id", "due_date", "status"),
     )
     insured_id: Mapped[UUID]

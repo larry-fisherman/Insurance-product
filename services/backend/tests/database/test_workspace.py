@@ -1543,3 +1543,24 @@ def test_input_change_supersedes_package_for_approval_and_export(
     assert export.status_code == 409, export.text
     assert export.json()["detail"]["code"] == "APPROVAL_REQUIRED"
     assert export_events(workspace_settings, actor, package_id) == 0
+
+
+def test_unsupported_line_is_rejected_by_database_constraint(
+    client: TestClient, database_engine: Engine
+) -> None:
+    submission_id, _ = demo(client)
+    with (
+        database_engine.connect() as connection,
+        pytest.raises(sa.exc.IntegrityError, match="ck_submission_line"),
+    ):
+        connection.execute(
+            sa.text("UPDATE app.submission SET line = 'property' WHERE id = :id"),
+            {"id": submission_id},
+        )
+    with database_engine.connect() as connection:
+        assert (
+            connection.scalar(
+                sa.text("SELECT line FROM app.submission WHERE id = :id"), {"id": submission_id}
+            )
+            == "cgl"
+        )

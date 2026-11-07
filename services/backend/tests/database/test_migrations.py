@@ -47,6 +47,27 @@ def test_downgrade_and_reupgrade_only_on_disposable_database(
         assert connection.execute(sa.text("SELECT count(*) FROM app.role")).scalar_one() == 5
 
 
+def test_line_guard_upgrade_adds_and_downgrade_removes_the_constraint(
+    database_factory: Callable[[], AbstractContextManager[Engine]],
+    migration_config: Callable[[Connection], Config],
+) -> None:
+    def line_checks(connection: Connection) -> list[str]:
+        return [
+            check["name"]
+            for check in sa.inspect(connection).get_check_constraints("submission", schema="app")
+            if check["name"] == "ck_submission_line"
+        ]
+
+    with database_factory() as engine, engine.connect() as connection:
+        config = migration_config(connection)
+        command.upgrade(config, "0012_line_guard")
+        assert line_checks(connection) == ["ck_submission_line"]
+        command.downgrade(config, "0011_storage_narrow")
+        assert line_checks(connection) == []
+        command.upgrade(config, "0012_line_guard")
+        assert line_checks(connection) == ["ck_submission_line"]
+
+
 def test_migration_owner_and_runtime_role_are_unprivileged(connection: Connection) -> None:
     rows = (
         connection.execute(

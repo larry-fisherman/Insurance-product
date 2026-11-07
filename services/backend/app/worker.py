@@ -34,7 +34,7 @@ from app.documents import (
     scan,
     validate_file,
 )
-from app.domain.cgl import PIPELINE_VERSION, PROMPT_VERSION, group_key
+from app.domain.cgl import PIPELINE_VERSION, PROMPT_VERSION, group_key, require_supported_line
 from app.domain.models import (
     CanonicalRevision,
     DocumentVersion,
@@ -271,6 +271,7 @@ def process_job(configuration: Settings, tenant_id: UUID, user_id: UUID, job_id:
                 document_type = "mixed"
             with db.tenant(tenant_id, user_id) as session:
                 submission = get(session, Submission, submission_id, lock=True)
+                require_supported_line(submission, error=DocumentError)
                 job = get(session, ProcessingJob, job_id, lock=True)
                 if job.status != "running" or job.attempts != claimed_attempt:
                     return
@@ -496,7 +497,8 @@ def process_job(configuration: Settings, tenant_id: UUID, user_id: UUID, job_id:
                     )
                 )
             with db.tenant(tenant_id, user_id) as session:
-                get(session, Submission, submission_id, lock=True)
+                submission = get(session, Submission, submission_id, lock=True)
+                require_supported_line(submission, error=DocumentError)
                 job = get(session, ProcessingJob, job_id, lock=True)
                 if job.status != "running" or job.attempts != claimed_attempt:
                     return

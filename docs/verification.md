@@ -110,3 +110,20 @@ Scope: no behaviour change. Removed the duplicate `get(...)` call in `audit_hist
 | Agent gate (`make check && make check-db`) | Green            | `make check` includes `check-web`; `make check-db` on disposable DBs.     |
 
 Not run for this batch: `make check-e2e`, `make evaluate`, `make verify-ocr`, scanner acceptance; not required by the batch.
+
+## Fail-closed line guard (audit Batch 3) — November 5, 2026
+
+Scope: added `SUPPORTED_LINES = frozenset({"cgl"})` and `require_supported_line` in `services/backend/app/domain/cgl.py`. API paths get `409 UNSUPPORTED_LINE`; the worker passes `error=DocumentError` and fails the job with `UNSUPPORTED_LINE` (non-retryable). Called from `readiness`, `review` and `save_revision` (`services/backend/app/workflow.py`), `generate_package` and `approve_package` (`services/backend/app/api.py`), and both worker branches after the submission is loaded (`services/backend/app/worker.py`). Migration `services/backend/migrations/versions/0012_line_guard.py` adds `ck_submission_line` (`line IN ('cgl')`); the `Submission` model mirrors it. Existing rows are untouched.
+
+| Check                                      | Result                                  | Evidence / limits                                                                                                                                                                                                                                                      |
+| ------------------------------------------ | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `make check-api`                           | Pass; 120 passed                        | Ruff, Ruff format, mypy strict over 77 source files, non-database pytest. Includes the guard unit test (API and worker paths).                                                                                                                                         |
+| `make check-db`                            | Pass; 132 passed                        | Disposable `cgl_test_*` databases. Includes the `0012` upgrade/downgrade/re-upgrade case and the constraint rejecting `'property'`. Head upgrade plus `alembic check` on a disposable database passes.                                                                 |
+| `make db-check`                            | Pass (after authorized upgrade)         | First run reported `Target database is not up to date` (developer database at `0011_storage_narrow`). After the user authorized `make db-migrate-native`, the developer database is at `0012_line_guard (head)` and `make db-check` reports no new upgrade operations. |
+| Agent gate (`make check && make check-db`) | See `.agent/status.md` for the last run | Run after all edits, including these docs.                                                                                                                                                                                                                             |
+
+Notes:
+
+- The tests use the plan's simpler alternative: no constraint is dropped in any database. There is no end-to-end API/worker test with a non-`cgl` row, because the constraint prevents creating one.
+- In the package worker branch the submission is first loaded in the final transaction, after rendering and artifact writes. The guard therefore runs there, before the package is marked `ready`.
+- Not run for this batch: `make check-e2e`, `make evaluate`, `make verify-ocr`, scanner acceptance; not required by the batch.

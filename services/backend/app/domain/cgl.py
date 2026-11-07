@@ -2,19 +2,41 @@
 
 import re
 from collections import defaultdict
+from collections.abc import Callable
 from datetime import date
 from decimal import Decimal, InvalidOperation
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.common import canonical_json, digest
+from app.common import canonical_json, digest, fail
+
+if TYPE_CHECKING:
+    from app.domain.models import Submission
 
 PIPELINE_VERSION = "cgl-extraction-2"
 SCHEMA_VERSION = "cgl-2"
 RULE_VERSION = "cgl-rules-2"
 REQUIREMENT_PROFILE = "cgl-synthetic-2"
 PROMPT_VERSION = "cgl-evidence-2"
+# Lines whose schema, rules and requirements are implemented. Anything else fails closed;
+# it is never silently routed to CGL rules. This is a guard, not a line registry.
+SUPPORTED_LINES = frozenset({"cgl"})
+
+
+def require_supported_line(
+    submission: "Submission", *, error: Callable[[str], Exception] | None = None
+) -> None:
+    """Fail closed for a submission whose line has no implemented rules.
+
+    API paths get the standard 409 ``UNSUPPORTED_LINE`` response. Workers pass their own
+    exception type (``DocumentError``) so this module does not import the document layer.
+    """
+    if submission.line in SUPPORTED_LINES:
+        return
+    if error is not None:
+        raise error("UNSUPPORTED_LINE")
+    fail(409, "UNSUPPORTED_LINE", "This insurance line is not supported.")
 
 
 class Context(BaseModel):
