@@ -391,3 +391,51 @@ def test_storage_upgrades_seed_existing_tenants_closed_and_round_trip(
         connection.commit()
         command.upgrade(config, "head")
         command.check(config)
+
+
+def public_privileges(connection: Connection, role: str) -> set[tuple[str, str]]:
+    """Every (relation, privilege) the role holds on any relation in schema public."""
+    privileges = (
+        "SELECT",
+        "INSERT",
+        "UPDATE",
+        "DELETE",
+        "TRUNCATE",
+        "REFERENCES",
+        "TRIGGER",
+        "MAINTAIN",
+    )
+    held: set[tuple[str, str]] = set()
+    relations = connection.execute(
+        sa.text("""
+        SELECT c.oid, c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')
+    """)
+    ).all()
+    for oid, name in relations:
+        for privilege in privileges:
+            if connection.scalar(
+                sa.text("SELECT has_table_privilege(:role, CAST(:oid AS oid), :privilege)"),
+                {"role": role, "oid": oid, "privilege": privilege},
+            ):
+                held.add((name, privilege))
+    return held
+
+
+def test_readiness_grant_is_only_select_on_alembic_version_and_round_trips(
+    database_factory: Callable[[], AbstractContextManager[Engine]],
+    migration_config: Callable[[Connection], Config],
+) -> None:
+    expected = {("alembic_version", "SELECT")}
+    with database_factory() as engine, engine.connect() as connection:
+        config = migration_config(connection)
+        command.upgrade(config, "0014_alembic_version_read")
+        assert public_privileges(connection, "cgl_auth") == expected
+        assert public_privileges(connection, "cgl_runtime") == set()
+        assert not connection.scalar(
+            sa.text("SELECT has_schema_privilege('cgl_auth', 'public', 'CREATE')")
+        )
+        command.downgrade(config, "0013_exception_accepted_at")
+        assert public_privileges(connection, "cgl_auth") == set()
+        command.upgrade(config, "0014_alembic_version_read")
+        assert public_privileges(connection, "cgl_auth") == expected

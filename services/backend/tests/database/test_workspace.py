@@ -1812,3 +1812,82 @@ def test_class_codes_without_namespace_are_separate_attributable_exceptions(
     namespace_rows = [r for r in rows[1:] if str(r[0]).startswith("missing:class_namespace")]
     assert len(namespace_rows) == 2
     assert all(r[3] == DEMO_APPROVER and r[4] for r in namespace_rows)
+
+
+def test_audit_request_id_matches_response_header(client: TestClient) -> None:
+    from uuid import uuid4
+
+    from app.database.models import AuditEvent
+
+    supplied = str(uuid4())
+    response = client.post(
+        "/api/v1/auth/demo",
+        json={},
+        headers={"Idempotency-Key": str(uuid4()), "X-Request-ID": supplied},
+    )
+    assert response.status_code == 201, response.text
+    assert response.headers["x-request-id"] == supplied
+    submission_id = response.json()["submission_id"]
+    actor = client.get("/api/v1/me").json()
+    db = Database(client.app.state.settings)  # type: ignore[attr-defined]
+    with db.tenant(UUID(actor["tenant_id"]), UUID(actor["user_id"])) as session:
+        request_ids = list(
+            session.scalars(
+                sa.select(AuditEvent.request_id).where(
+                    AuditEvent.action == "demo.created",
+                    AuditEvent.object_id == UUID(submission_id),
+                )
+            )
+        )
+    db.close()
+    assert request_ids == [UUID(supplied)]
+
+
+def test_transient_database_error_retries_with_backoff_then_fails_with_original_code(
+    client: TestClient, workspace_settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import timedelta
+
+    from app.common import now
+
+    submission_id, actor = demo(client)
+    tenant, user = UUID(actor["tenant_id"]), UUID(actor["user_id"])
+    db = Database(workspace_settings)
+
+    def unavailable(*args: Any) -> Any:
+        raise sa.exc.OperationalError("SELECT 1", None, Exception("synthetic outage"))
+
+    monkeypatch.setattr("app.worker.scan", unavailable)
+    try:
+        with db.tenant(tenant, user) as session:
+            job_id = session.scalars(
+                sa.select(ProcessingJob.id).where(ProcessingJob.status == "queued").limit(1)
+            ).one()
+
+        def state() -> ProcessingJob:
+            with db.tenant(tenant, user) as session:
+                return session.get_one(ProcessingJob, job_id)
+
+        for attempt in (1, 2):
+            started = now()
+            process_job(workspace_settings, tenant, user, job_id)
+            job = state()
+            assert (job.status, job.attempts, job.error_code) == (
+                "queued",
+                attempt,
+                "PROCESSING_FAILED",
+            )
+            assert job.lease_until is not None and job.finished_at is None
+            backoff = timedelta(seconds=30 * 2 ** (attempt - 1))
+            assert started + backoff <= job.lease_until <= now() + backoff
+            # A queued job inside its backoff is not claimed again.
+            process_job(workspace_settings, tenant, user, job_id)
+            assert state().attempts == attempt
+            with db.tenant(tenant, user) as session:
+                session.get_one(ProcessingJob, job_id).lease_until = now() - timedelta(seconds=1)
+        process_job(workspace_settings, tenant, user, job_id)
+        job = state()
+        assert (job.status, job.attempts, job.error_code) == ("failed", 3, "PROCESSING_FAILED")
+        assert job.lease_until is None and job.finished_at is not None
+    finally:
+        db.close()

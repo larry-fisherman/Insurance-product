@@ -5,8 +5,10 @@ import time
 from datetime import timedelta
 from uuid import UUID, uuid4
 
+import redis
 import sqlalchemy as sa
-from celery import Celery
+from celery import Celery, signals
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app import storage_quota
@@ -46,6 +48,7 @@ from app.domain.models import (
     Submission,
     UsageEvent,
 )
+from app.logging_setup import configure_logging
 from app.parser_client import parse_document
 from app.platform_models import Subscription
 from app.rendering import render
@@ -53,14 +56,18 @@ from app.storage import StorageCapacityError, storage
 from app.workflow import active_documents, get, refresh_issues
 
 
+@signals.setup_logging.connect  # type: ignore[untyped-decorator]
+def setup_logging(**_: object) -> None:
+    """Replace Celery's log setup with the content-free JSON formatter (ADR 0010)."""
+    configure_logging()
+
+
 def celery_app() -> Celery:
     configuration = Settings()
-    broker = (
-        configuration.redis_url.get_secret_value()
-        if configuration.redis_url
-        else "redis://127.0.0.1:56379/0"
-    )
-    application = Celery("cgl", broker=broker)
+    if configuration.redis_url is None:
+        # No silent unauthenticated loopback broker: the worker needs explicit Redis.
+        raise RuntimeError("The worker requires an explicit CGL_REDIS_URL")
+    application = Celery("cgl", broker=configuration.redis_url.get_secret_value())
     application.conf.update(
         task_serializer="json",
         accept_content=["json"],
@@ -197,11 +204,26 @@ def validate_job_authority(session: Session, job: ProcessingJob) -> None:
         raise DocumentError("SUBSCRIPTION_RESTRICTED")
 
 
+def retryable_failure(error: Exception) -> bool:
+    """Transient infrastructure failures retry within the existing 3 attempts and backoff.
+
+    Validation, integrity and capacity-reached errors stay final; a ``DocumentError`` keeps
+    its own ``retryable`` flag.
+    """
+    if isinstance(error, DocumentError):
+        return error.retryable
+    if isinstance(error, StorageCapacityError):
+        return error.code == "STORAGE_QUOTA_UNAVAILABLE"
+    return isinstance(error, (OperationalError, redis.RedisError))
+
+
 def process_job(configuration: Settings, tenant_id: UUID, user_id: UUID, job_id: UUID) -> None:
     db = Database(configuration)
     store = storage(configuration)
     started_at = time.perf_counter()
     claimed_attempt = 0
+    # Known only once the claim transaction has read the job; failure bookkeeping needs it.
+    submission_id: UUID | None = None
     try:
         with db.tenant(tenant_id, user_id) as session:
             job = get(session, ProcessingJob, job_id, lock=True)
@@ -550,14 +572,17 @@ def process_job(configuration: Settings, tenant_id: UUID, user_id: UUID, job_id:
             else "PROCESSING_FAILED"
         )
         logging.getLogger("cgl.processing").warning(
-            "job_failed job_id=%s code=%s exception_type=%s attempt=%s",
-            job_id,
-            code,
-            type(error).__name__,
-            claimed_attempt,
+            "job_failed",
+            extra={
+                "job_id": job_id,
+                "tenant_id": tenant_id,
+                "attempt": claimed_attempt,
+                "code": code,
+                "exception_type": type(error).__name__,
+            },
         )
-        retryable = isinstance(error, DocumentError) and error.retryable
-        if claimed_attempt:
+        retryable = retryable_failure(error)
+        if claimed_attempt and submission_id is not None:
             with db.tenant(tenant_id, user_id) as session:
                 submission = get(session, Submission, submission_id, lock=True)
                 job = get(session, ProcessingJob, job_id, lock=True)

@@ -21,3 +21,7 @@ Official setup references checked during implementation:
 - [FastAPI package metadata](https://pypi.org/project/fastapi/): Python compatibility and dependency release.
 
 No cloud resources or production environment are created by this decision.
+
+## Amendment — November 7, 2026: worker entry module reads settings at import
+
+`app/worker.py` builds its Celery application at module import (`celery = celery_app()`), which calls `Settings()` and therefore reads the environment and private env files when the module is imported. This is a deliberate exception: the Celery CLI (`celery -A app.worker:celery worker|beat|inspect`) locates the application object by importing that module, and the broker URL and beat schedule must be known at that point. The module now fails at import when `CGL_REDIS_URL` is unset instead of falling back to an unauthenticated loopback broker. The exception is limited to the worker entry module: the API application factory (`app.main.create_app`) still reads no configuration at import, and other modules keep the original rule.

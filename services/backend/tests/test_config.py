@@ -1,5 +1,7 @@
+from typing import Any
+
 import pytest
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 from app.config import Environment, Settings
 from app.main import create_app
@@ -64,3 +66,71 @@ def test_distinct_https_hosts_use_host_only_secure_cookie_names() -> None:
     )
     assert configuration.session_cookie == "__Host-app_session"
     assert configuration.csrf_cookie == "__Host-app_csrf"
+
+
+def test_kill_switch_defaults_preserve_local_behaviour_and_fail_closed_for_providers() -> None:
+    configuration = Settings(_env_file=None, app_env=Environment.TEST)
+    assert configuration.demo_enabled is True
+    assert configuration.api_docs_enabled is True
+    assert configuration.external_provider_authorized is False
+
+
+@pytest.mark.parametrize(
+    "provider",
+    [
+        {"extraction_provider": "gateway", "extraction_endpoint": "https://gw.example.invalid/x"},
+        {
+            "extraction_provider": "openai",
+            "extraction_key": SecretStr("synthetic-not-a-real-key"),
+            "extraction_model": "test-model",
+        },
+    ],
+)
+def test_non_local_provider_requires_explicit_external_authorization(
+    provider: dict[str, Any],
+) -> None:
+    with pytest.raises(ValidationError, match="external transmission authorization"):
+        Settings(_env_file=None, app_env=Environment.TEST, **provider)
+    authorized = Settings(
+        _env_file=None, app_env=Environment.TEST, external_provider_authorized=True, **provider
+    )
+    assert authorized.extraction_provider == provider["extraction_provider"]
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "http://gw.example.invalid/extract",
+        "https://user:secret@gw.example.invalid/extract",
+        "https://gw.example.invalid/extract?key=secret",
+        "https://gw.example.invalid/extract#fragment",
+        "https:///extract",
+    ],
+)
+def test_extraction_endpoint_must_be_plain_https_at_startup(endpoint: str) -> None:
+    with pytest.raises(ValidationError, match="Extraction endpoint must be an HTTPS URL") as caught:
+        Settings(
+            _env_file=None,
+            app_env=Environment.TEST,
+            extraction_provider="gateway",
+            extraction_endpoint=endpoint,
+            external_provider_authorized=True,
+        )
+    assert "secret" not in str(caught.value)
+
+
+def test_workspace_database_requires_explicit_redis() -> None:
+    workspace: dict[str, Any] = {
+        "runtime_database_url": SecretStr("postgresql+psycopg://r:p@127.0.0.1/cgl_dev"),
+        "auth_database_url": SecretStr("postgresql+psycopg://a:p@127.0.0.1/cgl_dev"),
+        "app_secret": SecretStr("x" * 40),
+    }
+    with pytest.raises(ValidationError, match="explicit Redis URL"):
+        Settings(_env_file=None, app_env=Environment.TEST, **workspace)
+    configured = Settings(
+        _env_file=None,
+        app_env=Environment.TEST,
+        redis_url=SecretStr("redis://:p@127.0.0.1:6379/0"),
+        **workspace,
+    )
+    assert configured.redis_url is not None

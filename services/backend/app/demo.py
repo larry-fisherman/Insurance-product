@@ -11,7 +11,7 @@ from fastapi import APIRouter, Request, Response
 from reportlab.pdfgen import canvas
 
 from app.api import store_document
-from app.common import audit
+from app.common import audit, fail
 from app.database.models import AppUser, Membership
 from app.domain.models import InsuredAccount, Submission, WorkItem
 from app.identity import (
@@ -26,6 +26,9 @@ from app.identity import (
 )
 
 router = APIRouter(prefix="/api/v1", tags=["synthetic-demo"])
+
+DEMO_GLOBAL_KEY = "demo:global"
+DEMO_GLOBAL_PER_HOUR = 30
 
 
 def pdf(lines: list[str]) -> bytes:
@@ -114,9 +117,15 @@ def fixtures() -> list[tuple[str, bytes]]:
 @router.post("/auth/demo", status_code=201)
 def demo(request: Request, response: Response) -> dict[str, Any]:
     require_local(request)
+    configuration = settings(request)
+    if not configuration.demo_enabled:
+        fail(404, "DEMO_DISABLED", "The fictional example is not available.")
     check_origin(request)
     throttle(request, "demo", 5)
-    configuration = settings(request)
+    # Process-wide cap in addition to the per-address key: behind a shared proxy every
+    # client shares one address, and each call creates a tenant and stored documents.
+    if not request.app.state.limiter.allow(DEMO_GLOBAL_KEY, DEMO_GLOBAL_PER_HOUR, 3600):
+        fail(429, "RATE_LIMITED", "Too many fictional examples were created. Try again later.")
     db = database(request)
     with db.identity() as session:
         user = AppUser(

@@ -50,6 +50,7 @@ def extract() -> None:
             app_env=Environment.TEST,
             extraction_provider="gateway",
             extraction_endpoint="https://provider.example.invalid/extract",
+            external_provider_authorized=True,
         ),
     )
 

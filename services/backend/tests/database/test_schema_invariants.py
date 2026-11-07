@@ -125,3 +125,22 @@ def test_runtime_denied_tables_have_forced_rls_and_no_runtime_access(
             ).scalar_one()
         }
         assert granted == set(), (name, granted)
+
+
+def test_identity_role_reads_only_the_schema_revision_in_public(connection: Connection) -> None:
+    # Readiness compares the applied head over the cgl_auth pool (0014); nothing else in
+    # public is reachable by either request role.
+    rows = connection.execute(
+        sa.text("""
+        SELECT c.relname, r.rolname,
+               has_table_privilege(r.rolname, c.oid, 'SELECT') AS can_select,
+               has_table_privilege(r.rolname, c.oid, 'INSERT, UPDATE, DELETE, TRUNCATE')
+                 AS can_write
+        FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+        CROSS JOIN (VALUES ('cgl_auth'), ('cgl_runtime')) AS r(rolname)
+        WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')
+    """)
+    ).all()
+    readable = {(row.relname, row.rolname) for row in rows if row.can_select}
+    assert readable == {("alembic_version", "cgl_auth")}
+    assert not any(row.can_write for row in rows)

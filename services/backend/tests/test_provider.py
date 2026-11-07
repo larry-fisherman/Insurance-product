@@ -17,6 +17,7 @@ def configuration() -> Settings:
         extraction_provider="openai",
         extraction_key=SecretStr("synthetic-not-a-real-key"),
         extraction_model="test-model",
+        external_provider_authorized=True,
         _env_file=None,
     )
 

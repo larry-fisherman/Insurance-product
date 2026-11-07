@@ -245,6 +245,8 @@ def current_actor(request: Request) -> Actor:
                     .where(Role.key.in_(roles))
                 )
             )
+        # Correlation only for the access log line; never used for authorization.
+        request.state.log_tenant_id = member.tenant_id if member else None
         return Actor(
             user.id,
             row.id,

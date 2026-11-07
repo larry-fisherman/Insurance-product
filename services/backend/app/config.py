@@ -58,6 +58,13 @@ class Settings(BaseSettings):
     oidc_jwks_uri: str | None = None
     marketing_origin: str = "http://127.0.0.1:3001"
     session_idle_minutes: int = 30
+    # Kill switches for unauthenticated or diagnostic surfaces, independent of auth_mode.
+    # True preserves current local/e2e behaviour; see require_supported_environment.
+    demo_enabled: bool = True
+    api_docs_enabled: bool = True
+    # Explicit operator acknowledgement that document-derived text may be transmitted to
+    # a non-local extraction provider. Fail closed: off unless deliberately enabled.
+    external_provider_authorized: bool = False
     # Report-only storage sweep (ADR 0008). Grace/TTL are versioned policy constants
     # in app.upload_cleanup, not settings. "report" is the only supported mode.
     storage_sweep_mode: Literal["report"] = "report"
@@ -134,6 +141,9 @@ class Settings(BaseSettings):
                     or parsed.query
                 ):
                     raise ValueError("OIDC endpoints must be approved HTTPS URLs")
+        # Only local and test environments are accepted below. Any future non-local
+        # environment must also require demo_enabled=False and api_docs_enabled=False
+        # (unauthenticated demo tenants and Swagger stay local diagnostics only).
         if self.app_env not in (Environment.LOCAL, Environment.TEST):
             raise ValueError(
                 "This foundation supports only local and test environments. "
@@ -148,6 +158,27 @@ class Settings(BaseSettings):
                 raise ValueError("Workspace requires runtime/auth database URLs and an app secret")
             if len(self.app_secret.get_secret_value()) < 32:
                 raise ValueError("App secret must contain at least 32 characters")
+        if self.redis_url is None and (self.runtime_database_url or self.auth_database_url):
+            # The workspace broker and shared limits need an explicit, authenticated Redis;
+            # there is no silent loopback default.
+            raise ValueError("Workspace requires an explicit Redis URL")
+        if self.extraction_endpoint:
+            extraction_url = urlsplit(self.extraction_endpoint)
+            if (
+                extraction_url.scheme != "https"
+                or not extraction_url.hostname
+                or extraction_url.username
+                or extraction_url.password
+                or extraction_url.query
+                or extraction_url.fragment
+            ):
+                raise ValueError(
+                    "Extraction endpoint must be an HTTPS URL without credentials, query or fragment"
+                )
+        if self.extraction_provider != "local" and not self.external_provider_authorized:
+            raise ValueError(
+                "A non-local extraction provider requires explicit external transmission authorization"
+            )
         if self.extraction_provider == "openai" and not (
             self.extraction_key and self.extraction_model
         ):

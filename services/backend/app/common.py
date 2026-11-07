@@ -12,6 +12,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.database.models import AuditEvent
+from app.logging_setup import REQUEST_ID
 
 
 def now() -> datetime:
@@ -66,7 +67,8 @@ def audit(
             action=action,
             object_type=object_type,
             object_id=object_id,
-            request_id=uuid4(),
+            # The HTTP request's correlation ID; workers and CLI have none and get a fresh one.
+            request_id=REQUEST_ID.get() or uuid4(),
             change_summary=summary or {},
         )
     )
